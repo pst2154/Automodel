@@ -88,6 +88,7 @@ class CreateRunResponse(BaseModel):
     name: Optional[str] = None
     status: str
     sequence: int
+    worker_id: Optional[str] = None
 
 
 class ForwardBackwardRequest(BaseModel):
@@ -167,6 +168,7 @@ class RunRecord(BaseModel):
     last_checkpoint_path: Optional[str] = None
     last_error: Optional[str] = None
     restored_from: Optional[str] = None
+    worker_id: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -927,11 +929,12 @@ def create_app(
                         detail=f"Resident adapter capacity reached: {len(runs)}/{max_resident_adapters}",
                     )
                 enforce_tenant_run_quota(request.tenant_id)
+                run_id = f"run_{uuid.uuid4().hex[:12]}"
+                assigned_worker = worker_manager.assign(run_id) if worker_manager is not None else None
                 client = service.create_lora_training_client(
                     adapter_id=request.adapter_id,
                     checkpoint_path=request.checkpoint_path,
                 )
-                run_id = f"run_{uuid.uuid4().hex[:12]}"
                 runs[run_id] = client
                 now = _utc_now()
                 record = RunRecord(
@@ -943,6 +946,7 @@ def create_app(
                     optimizer_steps=_client_step(client),
                     last_checkpoint_path=request.checkpoint_path,
                     restored_from=request.checkpoint_path,
+                    worker_id=assigned_worker.worker_id if assigned_worker is not None else None,
                     created_at=now,
                     updated_at=now,
                 )
@@ -955,6 +959,7 @@ def create_app(
                     name=request.name,
                     status=record.status,
                     sequence=record.sequence,
+                    worker_id=record.worker_id,
                 )
                 store_idempotent_response("create_run", request.idempotency_key, request, response)
                 return response

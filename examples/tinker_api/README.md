@@ -42,6 +42,8 @@ small compatibility smoke-test path.
 - Mixed-adapter backends: `loop`, `grouped`, `triton`, and `grouped_triton`.
 - SQLite-backed run/job/idempotency metadata plus interrupted-job continuation.
 - Optional local worker-process supervision via `--worker-processes`.
+- Durable worker placement metadata on each run when worker processes are
+  configured.
 - Tiny GPU smoke tests in the `nvcr.io/nvidia/nemo-automodel:26.04` container.
 
 ## Current Limits
@@ -53,7 +55,8 @@ small compatibility smoke-test path.
   metadata, but GPU work is still owned by a single in-process
   `MixedLoraServiceClient`.
 - `--worker-processes` supervises local worker processes and exposes health
-  endpoints, but request routing into those workers is not implemented yet.
+  endpoints. Runs receive stable worker placement metadata, but GPU request
+  execution still needs to move into those worker processes.
 - Live Tinker parity is opt-in because it requires Tinker credentials and can
   consume hosted training quota.
 - `--force-hf` is useful for arbitrary Hugging Face smoke-test models; AutoModel-native
@@ -456,8 +459,8 @@ delta path and, later, the small-adapter optimizer path.
 
 ## Next Steps
 
-1. Route HTTP requests into supervised worker processes instead of the
-   in-process mixed-LoRA worker.
+1. Move GPU request execution into the assigned supervised worker process
+   instead of the in-process mixed-LoRA worker.
 2. Benchmark and tune `grouped_triton` against the existing LoRA backends.
 3. Run the opt-in live Tinker parity test whenever credentials/quota are
    available and check in reviewed golden values.
