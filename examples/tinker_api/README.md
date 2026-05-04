@@ -460,6 +460,17 @@ No attention, RoPE, base-model GEMM, or normalization kernels need to change
 for the single-node prototype. The kernel work is specifically in the LoRA
 delta path and, later, the small-adapter optimizer path.
 
+Run the backend microbenchmark on a GPU host with:
+
+```bash
+python examples/tinker_api/benchmark_mixed_lora_backends.py \
+  --batch-size 8 \
+  --seq-len 128 \
+  --hidden-size 2048 \
+  --out-features 2048 \
+  --rank 16
+```
+
 ## Next Steps
 
 1. Move GPU request execution into the assigned supervised worker process
