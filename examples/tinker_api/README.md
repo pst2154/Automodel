@@ -189,6 +189,10 @@ POST /mixed_forward_backward
 POST /runs/{run_id}/optim_step
 POST /runs/{run_id}/save
 POST /runs/{run_id}/sample
+POST /train_steps
+GET  /jobs
+GET  /jobs/{job_id}
+POST /jobs/{job_id}/cancel
 ```
 
 Run records include `status`, `sequence`, `optimizer_steps`,
@@ -197,7 +201,8 @@ Run records include `status`, `sequence`, `optimizer_steps`,
 `updated_at`. State-changing endpoints return both the compact run record and
 the operation output, so clients do not need to make a second call after every
 training step. Metadata is persisted to
-`$SCRATCH/tinker_api/runs.json`; after a server restart, previously known runs
+`$SCRATCH/tinker_api/runs.json` and job metadata is persisted to
+`$SCRATCH/tinker_api/jobs.json`; after a server restart, previously known runs
 are listed as `detached` until a new resident adapter is created from a
 checkpoint.
 
@@ -243,6 +248,27 @@ examples through one `POST /mixed_forward_backward` call per step, steps each
 adapter independently, samples both adapters, verifies the expected route
 strings, and saves separate checkpoints.
 
+To let the service own the whole training loop through one `POST /train_steps`
+job, add `--server-train-steps`:
+
+```bash
+python examples/tinker_api/api_smoke_client.py \
+  --base-url http://127.0.0.1:18080 \
+  --base-model Qwen/Qwen3-0.6B \
+  --cache-dir /home/scratch.asteiner/hf \
+  --steps 120 \
+  --batch-size 2 \
+  --lr 1e-3 \
+  --max-new-tokens 12 \
+  --server-train-steps \
+  --verify-samples
+```
+
+`POST /train_steps` supports `run_async: true`; in that mode it returns a job
+record immediately and clients can poll `GET /jobs/{job_id}`. Cancel requests
+are best-effort in this prototype: queued jobs become `canceled`, and running
+jobs switch to `canceling` and stop at the next step boundary.
+
 To restore those saved adapters in a fresh server process:
 
 ```bash
@@ -256,19 +282,18 @@ python examples/tinker_api/api_smoke_client.py \
   --verify-samples
 ```
 
-This API layer is not production hardened. It has no auth, no durable DB, no
-SQL database, no cancellation, and no multi-process worker management yet. Its
-purpose is to freeze the basic Tinker-like HTTP contract around the mixed
-training worker while keeping the implementation pure Python.
+This API layer is not production hardened. It has no auth, no SQL database, no
+idempotency keys, and no multi-process worker management yet. Its purpose is to
+freeze the basic Tinker-like HTTP contract around the mixed training worker
+while keeping the implementation pure Python.
 
 ## Next Steps
 
-1. Add async job endpoints so clients can submit long-running work without
-   holding the HTTP connection open.
-2. Replace the JSON metadata file with SQLite or Postgres and add stronger
+1. Replace the JSON metadata files with SQLite or Postgres and add stronger
    restart recovery.
+2. Add idempotency keys so clients can safely retry create/train/save requests.
 3. Add built-in RL losses that match Tinker-style `importance_sampling`, `ppo`,
    `cispo`, and `dro` inputs.
 4. Replace serialized adapter swapping with multi-adapter batching or fused LoRA
    kernels inspired by mLoRA.
-5. Add cancellation, idempotency keys, auth, and tenant quotas.
+5. Add auth, tenant quotas, and multi-process worker management.

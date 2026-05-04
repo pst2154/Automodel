@@ -89,6 +89,7 @@ def main() -> None:
     parser.add_argument("--verify-samples", action="store_true")
     parser.add_argument("--atlas-checkpoint", default=None)
     parser.add_argument("--borealis-checkpoint", default=None)
+    parser.add_argument("--server-train-steps", action="store_true")
     args = parser.parse_args()
 
     if args.wait_for_server > 0:
@@ -133,27 +134,52 @@ def main() -> None:
     borealis_before = sample(borealis, borealis_prompt)
 
     first = last = None
-    for step in range(args.steps):
-        mixed = post_json(
+    if args.server_train_steps and args.steps > 0:
+        train_response = post_json(
             args.base_url,
-            "/mixed_forward_backward",
+            "/train_steps",
             {
                 "batches": {
                     atlas["run_id"]: [atlas_datum] * args.batch_size,
                     borealis["run_id"]: [borealis_datum] * args.batch_size,
-                }
+                },
+                "steps": args.steps,
+                "learning_rate": args.lr,
+                "batch_size": 1,
+                "save_names": {
+                    atlas["run_id"]: "api-smoke-atlas",
+                    borealis["run_id"]: "api-smoke-borealis",
+                },
             },
         )
-        post_json(args.base_url, f"/runs/{atlas['run_id']}/optim_step", {"learning_rate": args.lr})
-        post_json(args.base_url, f"/runs/{borealis['run_id']}/optim_step", {"learning_rate": args.lr})
-        losses = (mixed[atlas["run_id"]]["output"]["loss"], mixed[borealis["run_id"]]["output"]["loss"])
-        first = first or losses
-        last = losses
-        if args.sample_every > 0 and (step + 1) % args.sample_every == 0:
-            print(f"step={step + 1} losses={losses}")
+        first_losses = train_response["job"]["result"]["first_losses"]
+        last_losses = train_response["job"]["result"]["last_losses"]
+        first = (first_losses[atlas["run_id"]], first_losses[borealis["run_id"]])
+        last = (last_losses[atlas["run_id"]], last_losses[borealis["run_id"]])
+        atlas_save = {"output": {"path": train_response["job"]["result"]["saved_paths"][atlas["run_id"]]}}
+        borealis_save = {"output": {"path": train_response["job"]["result"]["saved_paths"][borealis["run_id"]]}}
+    else:
+        for step in range(args.steps):
+            mixed = post_json(
+                args.base_url,
+                "/mixed_forward_backward",
+                {
+                    "batches": {
+                        atlas["run_id"]: [atlas_datum] * args.batch_size,
+                        borealis["run_id"]: [borealis_datum] * args.batch_size,
+                    }
+                },
+            )
+            post_json(args.base_url, f"/runs/{atlas['run_id']}/optim_step", {"learning_rate": args.lr})
+            post_json(args.base_url, f"/runs/{borealis['run_id']}/optim_step", {"learning_rate": args.lr})
+            losses = (mixed[atlas["run_id"]]["output"]["loss"], mixed[borealis["run_id"]]["output"]["loss"])
+            first = first or losses
+            last = losses
+            if args.sample_every > 0 and (step + 1) % args.sample_every == 0:
+                print(f"step={step + 1} losses={losses}")
 
-    atlas_save = post_json(args.base_url, f"/runs/{atlas['run_id']}/save", {"name": "api-smoke-atlas"})
-    borealis_save = post_json(args.base_url, f"/runs/{borealis['run_id']}/save", {"name": "api-smoke-borealis"})
+        atlas_save = post_json(args.base_url, f"/runs/{atlas['run_id']}/save", {"name": "api-smoke-atlas"})
+        borealis_save = post_json(args.base_url, f"/runs/{borealis['run_id']}/save", {"name": "api-smoke-borealis"})
     atlas_after = sample(atlas, atlas_prompt)
     borealis_after = sample(borealis, borealis_prompt)
     atlas_state = get_json(args.base_url, f"/runs/{atlas['run_id']}")

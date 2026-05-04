@@ -137,3 +137,53 @@ def test_mixed_lora_server_marks_persisted_runs_detached(monkeypatch, tmp_path):
 
     record = restarted_client.get(f"/runs/{created['run_id']}").json()
     assert record["status"] == "detached"
+
+
+def test_mixed_lora_server_runs_server_owned_train_steps(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    first = client.post("/runs", json={"name": "atlas"}).json()
+    second = client.post("/runs", json={"name": "borealis"}).json()
+
+    response = client.post(
+        "/train_steps",
+        json={
+            "batches": {
+                first["run_id"]: [{"model_input": {"tokens": [1, 2, 3]}, "loss_fn_inputs": {}}],
+                second["run_id"]: [{"model_input": {"tokens": [4, 5, 6]}, "loss_fn_inputs": {}}],
+            },
+            "steps": 3,
+            "learning_rate": 0.001,
+            "save_names": {first["run_id"]: "atlas-job"},
+        },
+    ).json()
+
+    assert response["job"]["status"] == "succeeded"
+    assert response["job"]["progress"]["step"] == 3
+    assert response["job"]["result"]["last_losses"][first["run_id"]] == 1.0
+    assert response["runs"][first["run_id"]]["optimizer_steps"] == 3
+    assert response["runs"][first["run_id"]]["last_checkpoint_path"] == "/tmp/atlas-job"
+
+    jobs = client.get("/jobs").json()
+    assert jobs[0]["kind"] == "train_steps"
+
+
+def test_mixed_lora_server_submits_async_train_job(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    first = client.post("/runs", json={"name": "atlas"}).json()
+
+    submitted = client.post(
+        "/train_steps",
+        json={
+            "batches": {first["run_id"]: [{"model_input": {"tokens": [1, 2, 3]}, "loss_fn_inputs": {}}]},
+            "steps": 1,
+            "learning_rate": 0.001,
+            "run_async": True,
+        },
+    ).json()
+
+    job = client.get(f"/jobs/{submitted['job']['job_id']}").json()
+    assert job["status"] in {"queued", "running", "succeeded"}

@@ -113,6 +113,21 @@ class SampleRequest(BaseModel):
     do_sample: bool = True
 
 
+class TrainStepsRequest(BaseModel):
+    """Server-owned mixed training loop request."""
+
+    batches: dict[str, list[DatumRequest]]
+    steps: int
+    learning_rate: float
+    batch_size: int = 1
+    loss_fn: str = "cross_entropy"
+    weight_decay: float = 0.0
+    betas: tuple[float, float] = (0.9, 0.999)
+    eps: float = 1e-8
+    save_names: dict[str, str] = Field(default_factory=dict)
+    run_async: bool = False
+
+
 class RunRecord(BaseModel):
     """In-memory run metadata."""
 
@@ -130,6 +145,35 @@ class RunRecord(BaseModel):
     restored_from: Optional[str] = None
     created_at: str
     updated_at: str
+
+
+class JobRecord(BaseModel):
+    """Queued operation metadata."""
+
+    job_id: str
+    kind: str
+    status: str
+    sequence: int = 0
+    run_ids: list[str] = Field(default_factory=list)
+    progress: dict[str, Any] = Field(default_factory=dict)
+    result: Optional[dict[str, Any]] = None
+    error: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class JobSubmitResponse(BaseModel):
+    """Response returned when work is submitted asynchronously."""
+
+    job: JobRecord
+
+
+class TrainStepsResponse(BaseModel):
+    """Synchronous server-owned train loop response."""
+
+    job: JobRecord
+    runs: dict[str, RunRecord]
+    outputs: dict[str, Any]
 
 
 class ForwardBackwardResponse(BaseModel):
@@ -204,24 +248,26 @@ def _client_step(client: MixedLoraTrainingClient) -> int:
     return int(getattr(handle, "step", 0))
 
 
-class RunStore:
-    """Small JSON-backed run metadata store for the prototype service."""
+class JsonStore:
+    """Small JSON-backed metadata store for the prototype service."""
 
-    def __init__(self, path: str | pathlib.Path):
+    def __init__(self, path: str | pathlib.Path, key: str, record_type):
         self.path = pathlib.Path(path)
+        self.key = key
+        self.record_type = record_type
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def load(self) -> dict[str, RunRecord]:
-        """Load known run records from disk."""
+    def load(self) -> dict[str, Any]:
+        """Load known records from disk."""
         if not self.path.exists():
             return {}
         with self.path.open("r", encoding="utf-8") as fp:
             payload = json.load(fp)
-        return {run_id: RunRecord(**record) for run_id, record in payload.get("runs", {}).items()}
+        return {record_id: self.record_type(**record) for record_id, record in payload.get(self.key, {}).items()}
 
-    def save(self, records: dict[str, RunRecord]) -> None:
-        """Persist run records atomically."""
-        payload = {"runs": {run_id: _model_to_dict(record) for run_id, record in records.items()}}
+    def save(self, records: dict[str, Any]) -> None:
+        """Persist records atomically."""
+        payload = {self.key: {record_id: _model_to_dict(record) for record_id, record in records.items()}}
         tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
         with tmp_path.open("w", encoding="utf-8") as fp:
             json.dump(payload, fp, indent=2, sort_keys=True)
@@ -285,7 +331,8 @@ def create_app(
         trust_remote_code=trust_remote_code,
         lora_config=LoraConfig(rank=rank, alpha=alpha),
     )
-    run_store = RunStore(pathlib.Path(scratch_dir) / "tinker_api" / "runs.json")
+    run_store = JsonStore(pathlib.Path(scratch_dir) / "tinker_api" / "runs.json", "runs", RunRecord)
+    job_store = JsonStore(pathlib.Path(scratch_dir) / "tinker_api" / "jobs.json", "jobs", JobRecord)
     records: dict[str, RunRecord] = run_store.load()
     for record in records.values():
         if record.status not in {"failed", "detached"}:
@@ -294,7 +341,16 @@ def create_app(
     if records:
         run_store.save(records)
     runs: dict[str, MixedLoraTrainingClient] = {}
+    jobs: dict[str, JobRecord] = job_store.load()
+    for job in jobs.values():
+        if job.status in {"queued", "running", "canceling"}:
+            job.status = "failed"
+            job.error = "Job was interrupted by service restart"
+            job.updated_at = _utc_now()
+    if jobs:
+        job_store.save(jobs)
     records_lock = threading.RLock()
+    jobs_lock = threading.RLock()
     executor = QueuedExecutor()
 
     app = FastAPI(title="NeMo AutoModel Tinker API Prototype", version="0.1.0")
@@ -316,6 +372,7 @@ def create_app(
             "queue_depth": executor.queue_depth(),
             "worker_alive": executor.is_alive(),
             "run_store": str(run_store.path),
+            "job_store": str(job_store.path),
         }
 
     def get_record(run_id: str) -> RunRecord:
@@ -337,6 +394,142 @@ def create_app(
 
     def mark_run_failed(run_id: str, exc: Exception) -> None:
         mark_run(run_id, status="failed", error=f"{type(exc).__name__}: {exc}")
+
+    def create_job(kind: str, run_ids: list[str]) -> JobRecord:
+        now = _utc_now()
+        job = JobRecord(
+            job_id=f"job_{uuid.uuid4().hex[:12]}",
+            kind=kind,
+            status="queued",
+            run_ids=run_ids,
+            created_at=now,
+            updated_at=now,
+        )
+        with jobs_lock:
+            jobs[job.job_id] = job
+            job_store.save(jobs)
+        return job
+
+    def get_job_record(job_id: str) -> JobRecord:
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
+            return job
+
+    def mark_job(
+        job_id: str,
+        *,
+        status: Optional[str] = None,
+        progress: Optional[dict[str, Any]] = None,
+        result: Optional[dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ) -> JobRecord:
+        with jobs_lock:
+            job = get_job_record(job_id)
+            if status is not None:
+                job.status = status
+            if progress is not None:
+                job.progress = progress
+            if result is not None:
+                job.result = result
+            if error is not None:
+                job.error = error
+            job.sequence += 1
+            job.updated_at = _utc_now()
+            job_store.save(jobs)
+            return job
+
+    def fail_job(job_id: str, exc: Exception) -> None:
+        mark_job(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
+
+    def run_train_steps(request: TrainStepsRequest, job: JobRecord) -> TrainStepsResponse:
+        run_ids = list(request.batches)
+        if request.steps < 0:
+            raise ValueError("steps must be non-negative")
+        if request.batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        if get_job_record(job.job_id).status == "canceled":
+            return TrainStepsResponse(job=job, runs={}, outputs={})
+
+        clients_by_run = {run_id: get_run(run_id) for run_id in run_ids}
+        batches_by_run = {
+            run_id: [_datum_from_request(datum) for datum in batch] * request.batch_size
+            for run_id, batch in request.batches.items()
+        }
+        adam_params = AdamParams(
+            learning_rate=request.learning_rate,
+            weight_decay=request.weight_decay,
+            betas=request.betas,
+            eps=request.eps,
+        )
+
+        outputs: dict[str, Any] = {}
+        first_losses = None
+        last_losses = None
+        mark_job(job.job_id, status="running", progress={"step": 0, "total_steps": request.steps})
+        try:
+            for step in range(request.steps):
+                if get_job_record(job.job_id).status == "canceling":
+                    mark_job(job.job_id, status="canceled", progress={"step": step, "total_steps": request.steps})
+                    raise RuntimeError("Job canceled")
+                adapter_batches = {clients_by_run[run_id].adapter_id: batch for run_id, batch in batches_by_run.items()}
+                for run_id in run_ids:
+                    mark_run(run_id, status="running")
+                mixed_outputs = service.forward_backward_mixed(adapter_batches, request.loss_fn).result()
+                losses = {}
+                for run_id, client in clients_by_run.items():
+                    output = mixed_outputs[client.adapter_id]
+                    record = mark_run(run_id, status="ready")
+                    record.forward_backward_calls += 1
+                    record.last_loss = output.loss
+                    record.last_metrics = dict(output.metrics)
+                    losses[run_id] = output.loss
+                    outputs[run_id] = asdict(output)
+                first_losses = first_losses or losses
+                last_losses = losses
+                for run_id, client in clients_by_run.items():
+                    mark_run(run_id, status="optimizing")
+                    step_output = client.optim_step(adam_params).result()
+                    record = mark_run(run_id, status="ready")
+                    record.optimizer_steps = step_output.step
+                    outputs[f"{run_id}:optim_step"] = asdict(step_output)
+                mark_job(
+                    job.job_id,
+                    progress={
+                        "step": step + 1,
+                        "total_steps": request.steps,
+                        "last_losses": losses,
+                    },
+                )
+
+            saved_paths = {}
+            for run_id, save_name in request.save_names.items():
+                client = clients_by_run[run_id]
+                mark_run(run_id, status="saving")
+                save_output = client.save_state(save_name).result()
+                record = mark_run(run_id, status="ready")
+                record.last_checkpoint_path = save_output.path
+                saved_paths[run_id] = save_output.path
+                outputs[f"{run_id}:save"] = asdict(save_output)
+
+            result = {
+                "first_losses": first_losses,
+                "last_losses": last_losses,
+                "saved_paths": saved_paths,
+            }
+            job = mark_job(job.job_id, status="succeeded", result=result)
+            with records_lock:
+                run_store.save(records)
+                run_records = {run_id: records[run_id] for run_id in run_ids}
+            return TrainStepsResponse(job=job, runs=run_records, outputs=outputs)
+        except Exception as exc:
+            if get_job_record(job.job_id).status != "canceled":
+                fail_job(job.job_id, exc)
+            for run_id in run_ids:
+                if run_id in records:
+                    mark_run_failed(run_id, exc)
+            raise
 
     @app.post("/runs", response_model=CreateRunResponse)
     def create_run(request: CreateRunRequest) -> CreateRunResponse:
@@ -380,6 +573,40 @@ def create_app(
     @app.get("/runs/{run_id}", response_model=RunRecord)
     def get_run_record(run_id: str) -> RunRecord:
         return get_record(run_id)
+
+    @app.get("/jobs", response_model=list[JobRecord])
+    def list_jobs() -> list[JobRecord]:
+        with jobs_lock:
+            return list(jobs.values())
+
+    @app.get("/jobs/{job_id}", response_model=JobRecord)
+    def get_job(job_id: str) -> JobRecord:
+        return get_job_record(job_id)
+
+    @app.post("/jobs/{job_id}/cancel", response_model=JobRecord)
+    def cancel_job(job_id: str) -> JobRecord:
+        job = get_job_record(job_id)
+        if job.status == "queued":
+            return mark_job(job_id, status="canceled")
+        if job.status == "running":
+            return mark_job(job_id, status="canceling")
+        return job
+
+    @app.post("/train_steps")
+    def train_steps(request: TrainStepsRequest) -> TrainStepsResponse | JobSubmitResponse:
+        job = create_job("train_steps", list(request.batches))
+        if request.run_async:
+            future = executor.submit(lambda: run_train_steps(request, job))
+
+            def complete_job(done_future: Future) -> None:
+                try:
+                    done_future.result()
+                except Exception:
+                    pass
+
+            future.add_done_callback(complete_job)
+            return JobSubmitResponse(job=job)
+        return executor.submit(lambda: run_train_steps(request, job)).result()
 
     @app.post("/runs/{run_id}/forward_backward")
     def forward_backward(run_id: str, request: ForwardBackwardRequest) -> ForwardBackwardResponse:
