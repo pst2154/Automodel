@@ -244,6 +244,13 @@ class SampleResponseModel(BaseModel):
     output: dict[str, Any]
 
 
+class WorkerCommandResponse(BaseModel):
+    """Response from one supervised worker command."""
+
+    worker: WorkerProcessRecord
+    result: dict[str, Any]
+
+
 def _datum_from_request(request: DatumRequest) -> Datum:
     loss_fn_inputs = dict(request.loss_fn_inputs)
     target_tokens = loss_fn_inputs.get("target_tokens")
@@ -602,6 +609,17 @@ def create_app(
         if worker_manager is None:
             return []
         return worker_manager.restart_dead()
+
+    @app.post("/workers/{worker_id}/ping", response_model=WorkerCommandResponse)
+    def ping_worker(worker_id: str) -> WorkerCommandResponse:
+        if worker_manager is None:
+            raise HTTPException(status_code=404, detail="Worker processes are not enabled")
+        result = worker_manager.submit(worker_id, "ping", timeout_seconds=5.0)
+        records_by_id = {record.worker_id: record for record in worker_manager.snapshot()}
+        worker = records_by_id.get(worker_id)
+        if worker is None:
+            raise HTTPException(status_code=404, detail=f"Unknown worker_id: {worker_id}")
+        return WorkerCommandResponse(worker=worker, result=result)
 
     def tenant_key(tenant_id: Optional[str]) -> str:
         return tenant_id or "_default"

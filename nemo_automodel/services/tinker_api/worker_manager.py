@@ -19,15 +19,48 @@ from __future__ import annotations
 import hashlib
 import multiprocessing as mp
 import os
+import queue
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 
-def _idle_worker(stop_event) -> None:
-    """Keep a managed worker process alive until the supervisor asks it to stop."""
+def _default_start_method() -> str:
+    """Choose a multiprocessing start method that works well for local service workers."""
+    if "fork" in mp.get_all_start_methods():
+        return "fork"
+    return "spawn"
+
+
+def _rpc_worker(stop_event, command_queue, result_queue) -> None:
+    """Serve simple worker-management RPC commands until shutdown."""
     while not stop_event.is_set():
-        time.sleep(0.1)
+        try:
+            request = command_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
+        request_id = request.get("request_id")
+        command = request.get("command")
+        try:
+            if command == "ping":
+                response = {
+                    "worker_pid": os.getpid(),
+                    "time": time.time(),
+                }
+            elif command == "stop":
+                stop_event.set()
+                response = {"stopping": True}
+            else:
+                raise ValueError(f"Unknown worker command: {command!r}")
+            result_queue.put({"request_id": request_id, "ok": True, "result": response})
+        except Exception as exc:
+            result_queue.put(
+                {
+                    "request_id": request_id,
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
 
 
 @dataclass
@@ -48,6 +81,8 @@ class _WorkerSlot:
     record: WorkerProcessRecord
     process: mp.Process
     stop_event: mp.Event
+    command_queue: mp.Queue
+    result_queue: mp.Queue
 
 
 class ProcessWorkerManager:
@@ -62,7 +97,7 @@ class ProcessWorkerManager:
         self,
         *,
         num_workers: int,
-        start_method: str = "spawn",
+        start_method: Optional[str] = None,
         worker_prefix: str = "tinker-worker",
         stop_timeout_seconds: float = 5.0,
     ):
@@ -73,7 +108,7 @@ class ProcessWorkerManager:
         self.num_workers = num_workers
         self.worker_prefix = worker_prefix
         self.stop_timeout_seconds = stop_timeout_seconds
-        self._ctx = mp.get_context(start_method)
+        self._ctx = mp.get_context(start_method or _default_start_method())
         self._slots: dict[str, _WorkerSlot] = {}
 
     def start(self) -> None:
@@ -87,6 +122,7 @@ class ProcessWorkerManager:
     def stop(self) -> None:
         """Stop all managed worker processes."""
         for slot in list(self._slots.values()):
+            self._submit_to_slot(slot, "stop", timeout_seconds=0.25, raise_on_error=False)
             slot.stop_event.set()
         deadline = time.monotonic() + self.stop_timeout_seconds
         for slot in list(self._slots.values()):
@@ -135,15 +171,26 @@ class ProcessWorkerManager:
         index = int.from_bytes(digest[:8], byteorder="big") % len(running)
         return sorted(running, key=lambda record: record.worker_id)[index]
 
+    def submit(self, worker_id: str, command: str, *, timeout_seconds: float = 30.0) -> dict[str, Any]:
+        """Submit a management command to a worker process and return its result."""
+        slot = self._slots.get(worker_id)
+        if slot is None:
+            raise KeyError(f"Unknown worker_id: {worker_id}")
+        if not slot.process.is_alive():
+            raise RuntimeError(f"Worker {worker_id!r} is not running")
+        return self._submit_to_slot(slot, command, timeout_seconds=timeout_seconds, raise_on_error=True)
+
     def _restart_count(self, worker_id: str) -> int:
         slot = self._slots.get(worker_id)
         return 0 if slot is None else slot.record.restarts
 
     def _start_slot(self, worker_id: str, *, restarts: int) -> _WorkerSlot:
         stop_event = self._ctx.Event()
+        command_queue = self._ctx.Queue()
+        result_queue = self._ctx.Queue()
         process = self._ctx.Process(
-            target=_idle_worker,
-            args=(stop_event,),
+            target=_rpc_worker,
+            args=(stop_event, command_queue, result_queue),
             name=worker_id,
             daemon=True,
         )
@@ -154,4 +201,43 @@ class ProcessWorkerManager:
             status="running",
             restarts=restarts,
         )
-        return _WorkerSlot(record=record, process=process, stop_event=stop_event)
+        return _WorkerSlot(
+            record=record,
+            process=process,
+            stop_event=stop_event,
+            command_queue=command_queue,
+            result_queue=result_queue,
+        )
+
+    def _submit_to_slot(
+        self,
+        slot: _WorkerSlot,
+        command: str,
+        *,
+        timeout_seconds: float,
+        raise_on_error: bool,
+    ) -> dict[str, Any]:
+        request_id = f"req_{time.monotonic_ns()}"
+        slot.command_queue.put({"request_id": request_id, "command": command})
+        deadline = time.monotonic() + timeout_seconds
+        parked_results = []
+        while time.monotonic() < deadline:
+            try:
+                response = slot.result_queue.get(timeout=max(0.01, min(0.1, deadline - time.monotonic())))
+            except queue.Empty:
+                continue
+            if response.get("request_id") != request_id:
+                parked_results.append(response)
+                continue
+            for parked in parked_results:
+                slot.result_queue.put(parked)
+            if response.get("ok"):
+                return response.get("result", {})
+            if raise_on_error:
+                raise RuntimeError(response.get("error", "worker command failed"))
+            return {"error": response.get("error")}
+        for parked in parked_results:
+            slot.result_queue.put(parked)
+        if raise_on_error:
+            raise TimeoutError(f"Worker {slot.record.worker_id!r} did not answer command {command!r}")
+        return {"error": "timeout"}

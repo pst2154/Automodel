@@ -44,6 +44,8 @@ small compatibility smoke-test path.
 - Optional local worker-process supervision via `--worker-processes`.
 - Durable worker placement metadata on each run when worker processes are
   configured.
+- Worker management IPC via `POST /workers/{worker_id}/ping`, proving the HTTP
+  service can route commands into a specific supervised process.
 - Tiny GPU smoke tests in the `nvcr.io/nvidia/nemo-automodel:26.04` container.
 
 ## Current Limits
@@ -55,8 +57,9 @@ small compatibility smoke-test path.
   metadata, but GPU work is still owned by a single in-process
   `MixedLoraServiceClient`.
 - `--worker-processes` supervises local worker processes and exposes health
-  endpoints. Runs receive stable worker placement metadata, but GPU request
-  execution still needs to move into those worker processes.
+  endpoints. Runs receive stable worker placement metadata and management
+  commands route into those processes, but GPU request execution still needs to
+  move into the worker RPC protocol.
 - Live Tinker parity is opt-in because it requires Tinker credentials and can
   consume hosted training quota.
 - `--force-hf` is useful for arbitrary Hugging Face smoke-test models; AutoModel-native

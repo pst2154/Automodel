@@ -127,6 +127,7 @@ def test_mixed_lora_server_reports_supervised_worker_processes(monkeypatch, tmp_
         workers = client.get("/workers").json()
         created = client.post("/runs", json={"name": "placed"}).json()
         record = client.get(f"/runs/{created['run_id']}").json()
+        ping = client.post(f"/workers/{created['worker_id']}/ping").json()
 
         assert health["worker_processes"] == 2
         assert len(health["workers"]) == 2
@@ -135,6 +136,8 @@ def test_mixed_lora_server_reports_supervised_worker_processes(monkeypatch, tmp_
         assert all(worker["pid"] for worker in workers)
         assert created["worker_id"] in {worker["worker_id"] for worker in workers}
         assert record["worker_id"] == created["worker_id"]
+        assert ping["worker"]["worker_id"] == created["worker_id"]
+        assert ping["result"]["worker_pid"] == ping["worker"]["pid"]
 
 
 def test_mixed_lora_server_restores_run_metadata(monkeypatch, tmp_path):
