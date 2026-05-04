@@ -93,6 +93,7 @@ class ForwardBackwardRequest(BaseModel):
 
     data: list[DatumRequest]
     loss_fn: str = "cross_entropy"
+    loss_fn_config: dict[str, float] = Field(default_factory=dict)
 
 
 class MixedForwardBackwardRequest(BaseModel):
@@ -100,6 +101,7 @@ class MixedForwardBackwardRequest(BaseModel):
 
     batches: dict[str, list[DatumRequest]]
     loss_fn: str = "cross_entropy"
+    loss_fn_config: dict[str, float] = Field(default_factory=dict)
 
 
 class OptimStepRequest(BaseModel):
@@ -137,6 +139,7 @@ class TrainStepsRequest(BaseModel):
     learning_rate: float
     batch_size: int = 1
     loss_fn: str = "cross_entropy"
+    loss_fn_config: dict[str, float] = Field(default_factory=dict)
     weight_decay: float = 0.0
     betas: tuple[float, float] = (0.9, 0.999)
     eps: float = 1e-8
@@ -795,7 +798,11 @@ def create_app(
                 adapter_batches = {clients_by_run[run_id].adapter_id: batch for run_id, batch in batches_by_run.items()}
                 for run_id in run_ids:
                     mark_run(run_id, status="running")
-                mixed_outputs = service.forward_backward_mixed(adapter_batches, request.loss_fn).result()
+                mixed_outputs = service.forward_backward_mixed(
+                    adapter_batches,
+                    request.loss_fn,
+                    request.loss_fn_config,
+                ).result()
                 losses = {}
                 for run_id, client in clients_by_run.items():
                     output = mixed_outputs[client.adapter_id]
@@ -999,9 +1006,11 @@ def create_app(
             try:
                 mark_run(run_id, status="running")
                 data = [_datum_from_request(datum) for datum in request.data]
-                output = service.forward_backward_mixed({client.adapter_id: data}, request.loss_fn).result()[
-                    client.adapter_id
-                ]
+                output = service.forward_backward_mixed(
+                    {client.adapter_id: data},
+                    request.loss_fn,
+                    request.loss_fn_config,
+                ).result()[client.adapter_id]
                 record = mark_run(run_id, status="ready")
                 record.forward_backward_calls += 1
                 record.last_loss = output.loss
@@ -1029,7 +1038,11 @@ def create_app(
                     client = get_run(run_id)
                     batches_by_adapter[client.adapter_id] = [_datum_from_request(datum) for datum in batch]
                     run_to_adapter[run_id] = client.adapter_id
-                outputs = service.forward_backward_mixed(batches_by_adapter, request.loss_fn).result()
+                outputs = service.forward_backward_mixed(
+                    batches_by_adapter,
+                    request.loss_fn,
+                    request.loss_fn_config,
+                ).result()
                 responses = {}
                 for run_id, adapter_id in run_to_adapter.items():
                     output = outputs[adapter_id]

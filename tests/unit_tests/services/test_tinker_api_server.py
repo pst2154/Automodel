@@ -59,7 +59,7 @@ class FakeMixedLoraServiceClient:
             self.steps[adapter_id] = 7
         return FakeTrainingClient(self, adapter_id, step=self.steps[adapter_id])
 
-    def forward_backward_mixed(self, batches_by_adapter, loss_fn):
+    def forward_backward_mixed(self, batches_by_adapter, loss_fn, loss_fn_config=None):
         outputs = {}
         for adapter_id, batch in batches_by_adapter.items():
             outputs[adapter_id] = ForwardBackwardOutput(

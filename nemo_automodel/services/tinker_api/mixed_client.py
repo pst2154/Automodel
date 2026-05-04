@@ -105,12 +105,14 @@ def _rl_token_loss(
     data: list[Datum],
     token_mask: torch.Tensor,
     device: torch.device,
+    loss_fn_config: Optional[dict[str, float]] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
     """Return token loss, effective mask, and metrics for SFT/RL-style objectives."""
-    max_length = token_mask.shape[1] + 1
-    weights = _pad_float_field(data, "weights", default_value=1.0, max_length=max_length, device=device)[:, 1:]
+    loss_fn_config = loss_fn_config or {}
+    max_length = token_mask.shape[1]
+    weights = _pad_float_field(data, "weights", default_value=1.0, max_length=max_length, device=device)
     effective_mask = token_mask & weights.ne(0)
-    token_weights = weights.abs().masked_fill(~effective_mask, 0.0)
+    token_weights = weights.masked_fill(~effective_mask, 0.0)
     metrics = {
         "loss_weight_mean": float(token_weights[effective_mask].mean().detach().cpu()) if effective_mask.any() else 0.0
     }
@@ -118,62 +120,59 @@ def _rl_token_loss(
     if loss_fn == "cross_entropy":
         return per_token_loss * token_weights, effective_mask, metrics
 
-    old_logprobs = _pad_float_field(
+    for datum in data:
+        if "logprobs" not in datum.loss_fn_inputs:
+            raise ValueError(f"loss_fn={loss_fn!r} requires loss_fn_inputs['logprobs']")
+        if "advantages" not in datum.loss_fn_inputs:
+            raise ValueError(f"loss_fn={loss_fn!r} requires loss_fn_inputs['advantages']")
+
+    sampling_logprobs = _pad_float_field(
         data,
         "logprobs",
         default_value=0.0,
         max_length=max_length,
         device=device,
-    )[:, 1:]
-    ref_logprobs = _pad_float_field(
-        data,
-        "ref_logprobs",
-        default_value=0.0,
-        max_length=max_length,
-        device=device,
-    )[:, 1:]
+    )
     advantages = _pad_float_field(
         data,
         "advantages",
         default_value=1.0,
         max_length=max_length,
         device=device,
-    )[:, 1:]
-    clip_epsilon = float(data[0].loss_fn_inputs.get("clip_epsilon", 0.2)) if data else 0.2
-    kl_coef = float(data[0].loss_fn_inputs.get("kl_coef", 0.0)) if data else 0.0
+    )
+    clip_low = float(loss_fn_config.get("clip_low_threshold", data[0].loss_fn_inputs.get("clip_low_threshold", 0.8)))
+    clip_high = float(loss_fn_config.get("clip_high_threshold", data[0].loss_fn_inputs.get("clip_high_threshold", 1.2)))
+    beta = float(
+        loss_fn_config.get("beta", data[0].loss_fn_inputs.get("beta", data[0].loss_fn_inputs.get("dro_beta", 0.1)))
+    )
 
-    old_logprobs = torch.where(old_logprobs == 0.0, gathered_logprobs.detach(), old_logprobs)
-    ref_logprobs = torch.where(ref_logprobs == 0.0, gathered_logprobs.detach(), ref_logprobs)
-    ratio = torch.exp((gathered_logprobs - old_logprobs).clamp(-20.0, 20.0))
+    ratio = torch.exp((gathered_logprobs - sampling_logprobs).clamp(-20.0, 20.0))
     weighted_advantages = advantages * token_weights
 
     if loss_fn == "importance_sampling":
         token_loss = -ratio * weighted_advantages
     elif loss_fn == "ppo":
-        clipped_ratio = ratio.clamp(1.0 - clip_epsilon, 1.0 + clip_epsilon)
+        clipped_ratio = ratio.clamp(clip_low, clip_high)
         unclipped = ratio * weighted_advantages
         clipped = clipped_ratio * weighted_advantages
-        objective = torch.where(
-            weighted_advantages >= 0, torch.minimum(unclipped, clipped), torch.maximum(unclipped, clipped)
-        )
-        token_loss = -objective
-        if kl_coef:
-            token_loss = token_loss + kl_coef * (gathered_logprobs - ref_logprobs).pow(2) * token_weights
+        token_loss = -torch.minimum(unclipped, clipped)
     elif loss_fn == "cispo":
-        clipped_ratio = ratio.clamp(1.0 - clip_epsilon, 1.0 + clip_epsilon)
-        token_loss = -clipped_ratio * weighted_advantages
+        clipped_ratio = ratio.clamp(clip_low, clip_high)
+        token_loss = -(clipped_ratio.detach() * gathered_logprobs * weighted_advantages)
     elif loss_fn == "dro":
-        eta = float(data[0].loss_fn_inputs.get("dro_eta", 1.0)) if data else 1.0
-        sequence_loss = (per_token_loss * token_weights).sum(dim=1) / token_weights.sum(dim=1).clamp_min(1.0)
-        sequence_weights = torch.softmax(eta * sequence_loss.detach(), dim=0).unsqueeze(1) * token_weights.shape[0]
-        token_loss = per_token_loss * token_weights * sequence_weights
-        metrics["dro_max_sequence_weight"] = float(sequence_weights.max().detach().cpu())
+        quadratic_term = (gathered_logprobs - sampling_logprobs).pow(2)
+        objective = gathered_logprobs * advantages - 0.5 * beta * quadratic_term
+        token_loss = -objective * token_weights
     else:
         raise NotImplementedError(f"Unsupported loss_fn={loss_fn!r}; expected one of {sorted(SUPPORTED_LOSS_FNS)}")
 
     metrics["importance_ratio_mean"] = (
         float(ratio[effective_mask].mean().detach().cpu()) if effective_mask.any() else 0.0
     )
+    metrics["clip_low_threshold"] = clip_low
+    metrics["clip_high_threshold"] = clip_high
+    if loss_fn == "dro":
+        metrics["beta"] = beta
     return token_loss, effective_mask, metrics
 
 
@@ -512,6 +511,7 @@ class MixedLoraServiceClient:
         self,
         batches_by_adapter: dict[str, list[Datum]],
         loss_fn: str = "cross_entropy",
+        loss_fn_config: Optional[dict[str, float]] = None,
     ) -> APIFuture[dict[str, ForwardBackwardOutput]]:
         """Run one mixed-adapter forward/backward pass over a concatenated batch."""
         if loss_fn not in SUPPORTED_LOSS_FNS:
@@ -544,8 +544,8 @@ class MixedLoraServiceClient:
         self.model.train()
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
         logits = outputs.logits
-        shift_logits = logits[:, :-1, :].contiguous().float()
-        shift_labels = labels[:, 1:].contiguous()
+        shift_logits = logits.contiguous().float()
+        shift_labels = labels.contiguous()
         per_token_ce = F.cross_entropy(
             shift_logits.view(-1, shift_logits.size(-1)),
             shift_labels.view(-1),
@@ -570,18 +570,22 @@ class MixedLoraServiceClient:
                 data=data[start:end],
                 token_mask=token_mask[start:end],
                 device=self.device,
+                loss_fn_config=loss_fn_config,
             )
             denom = adapter_mask.float().sum().clamp_min(1.0)
-            mean_loss = adapter_loss.masked_fill(~adapter_mask, 0.0).sum() / denom
-            total_loss = total_loss + mean_loss
+            loss_sum = adapter_loss.masked_fill(~adapter_mask, 0.0).sum()
+            loss_mean = loss_sum / denom
+            total_loss = total_loss + loss_sum
             metrics = {
-                "loss": float(mean_loss.detach().cpu()),
+                "loss": float(loss_sum.detach().cpu()),
+                "loss:sum": float(loss_sum.detach().cpu()),
+                "loss:mean": float(loss_mean.detach().cpu()),
                 "num_label_tokens": float(denom.detach().cpu()),
                 "loss_fn": loss_fn,
                 **loss_metrics,
             }
             outputs_by_adapter[adapter_id] = ForwardBackwardOutput(
-                loss=float(mean_loss.detach().cpu()),
+                loss=float(loss_sum.detach().cpu()),
                 metrics=metrics,
                 loss_fn_outputs=[{"logprobs": row.detach().cpu().tolist()} for row in gathered[start:end]],
             )

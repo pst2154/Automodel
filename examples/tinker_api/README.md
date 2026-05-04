@@ -375,14 +375,15 @@ weight stacking.
 
 - `cross_entropy`: SFT-style token cross entropy.
 - `importance_sampling`: policy-gradient style `-ratio * advantage`.
-- `ppo`: clipped-ratio policy objective with optional `kl_coef`.
-- `cispo`: clipped importance-sampling objective.
-- `dro`: sequence-level robust weighting over token cross entropy.
+- `ppo`: Tinker-style clipped-ratio objective.
+- `cispo`: clipped-ratio gradient coefficient on target logprobs.
+- `dro`: Tinker-style quadratic penalty on policy divergence.
 
-The RL modes use `loss_fn_inputs` fields when present: `weights`, `advantages`,
-`logprobs`, `ref_logprobs`, `clip_epsilon`, `kl_coef`, and `dro_eta`. Missing
-old/reference logprobs default to the current detached target logprobs, which
-keeps smoke tests usable while still accepting Tinker-style payloads.
+The RL modes require Tinker-style `loss_fn_inputs["logprobs"]` and
+`loss_fn_inputs["advantages"]`; `weights` remains an optional token mask or
+weight. `loss_fn_config` supports `clip_low_threshold` and
+`clip_high_threshold` for `ppo`/`cispo`, and `beta` for `dro`. Losses are
+summed over tokens to match Tinker diagnostics.
 
 The production kernels that remain are:
 
@@ -401,7 +402,7 @@ delta path and, later, the small-adapter optimizer path.
 
 ## Next Steps
 
-1. Tighten RL loss parity against the real Tinker server formulas.
+1. Add golden-value parity tests against the live Tinker service.
 2. Replace per-range LoRA launches with grouped mixed-adapter LoRA kernels
    inspired by mLoRA.
 3. Add multi-process worker management.

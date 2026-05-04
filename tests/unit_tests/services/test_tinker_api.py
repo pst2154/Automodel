@@ -51,21 +51,17 @@ def test_rl_token_loss_modes_return_finite_weighted_loss(loss_fn):
         Datum(
             model_input=ModelInput.from_ints([1, 2, 3]),
             loss_fn_inputs={
-                "weights": [0.0, 1.0, 1.0],
-                "advantages": [0.0, 1.5, -0.5],
-                "logprobs": [0.0, -1.1, -1.2],
-                "ref_logprobs": [0.0, -1.0, -1.0],
-                "clip_epsilon": 0.2,
-                "kl_coef": 0.1,
-                "dro_eta": 0.5,
+                "weights": [1.0, 1.0],
+                "advantages": [1.5, -0.5],
+                "logprobs": [-1.1, -1.2],
             },
         ),
         Datum(
             model_input=ModelInput.from_ints([4, 5, 6]),
             loss_fn_inputs={
-                "weights": [0.0, 1.0, 0.0],
-                "advantages": [0.0, 0.25, 0.0],
-                "logprobs": [0.0, -0.9, 0.0],
+                "weights": [1.0, 0.0],
+                "advantages": [0.25, 0.0],
+                "logprobs": [-0.9, 0.0],
             },
         ),
     ]
@@ -80,12 +76,28 @@ def test_rl_token_loss_modes_return_finite_weighted_loss(loss_fn):
         data=data,
         token_mask=token_mask,
         device=torch.device("cpu"),
+        loss_fn_config={"clip_low_threshold": 0.8, "clip_high_threshold": 1.2, "beta": 0.05},
     )
+    ratio = torch.exp(gathered - torch.tensor([[-1.1, -1.2], [-0.9, 0.0]]))
+    advantages = torch.tensor([[1.5, -0.5], [0.25, 0.0]])
+    weights = torch.tensor([[1.0, 1.0], [1.0, 0.0]])
+    if loss_fn == "importance_sampling":
+        expected = -ratio * advantages * weights
+    elif loss_fn == "ppo":
+        expected = -torch.minimum(ratio * advantages * weights, ratio.clamp(0.8, 1.2) * advantages * weights)
+    elif loss_fn == "cispo":
+        expected = -(ratio.clamp(0.8, 1.2) * gathered * advantages * weights)
+    else:
+        expected = (
+            -((gathered * advantages) - 0.5 * 0.05 * (gathered - torch.tensor([[-1.1, -1.2], [-0.9, 0.0]])).pow(2))
+            * weights
+        )
 
     assert token_loss.shape == per_token_loss.shape
     assert torch.isfinite(token_loss[effective_mask]).all()
     assert effective_mask.tolist() == [[True, True], [True, False]]
     assert metrics["loss_weight_mean"] == 1.0
+    assert torch.allclose(token_loss, expected)
 
 
 def test_mixed_lora_layer_routes_ranges_with_torch_fallback():
