@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 
 from nemo_automodel.services.tinker_api import client as tinker_client
@@ -56,6 +57,66 @@ def test_mixed_lora_layer_routes_ranges_with_torch_fallback():
 
     assert not layer._can_use_triton_lora(torch.zeros(1, 3))
     assert torch.allclose(out, torch.tensor([[12.0, 3.0], [7.0, 59.0]]))
+
+
+@pytest.mark.run_only_on("GPU")
+def test_mixed_lora_layer_triton_bridge_matches_torch_forward_backward():
+    torch.manual_seed(1234)
+    base_ref = torch.nn.Linear(8, 6, bias=False, device="cuda")
+    base_triton = torch.nn.Linear(8, 6, bias=False, device="cuda")
+    base_triton.weight.data.copy_(base_ref.weight)
+
+    layer_ref = MixedAdapterLinearLoRA(
+        base_ref,
+        rank=2,
+        alpha=4,
+        dropout=0.0,
+        lora_dtype=torch.float32,
+        use_triton_lora=False,
+    )
+    layer_triton = MixedAdapterLinearLoRA(
+        base_triton,
+        rank=2,
+        alpha=4,
+        dropout=0.0,
+        lora_dtype=torch.float32,
+        use_triton_lora=True,
+    )
+    for adapter_id in ["atlas", "borealis"]:
+        layer_ref.add_adapter(adapter_id)
+        layer_triton.add_adapter(adapter_id)
+        layer_ref.lora_a[adapter_id].data.normal_(mean=0.0, std=0.05)
+        layer_ref.lora_b[adapter_id].data.normal_(mean=0.0, std=0.05)
+        layer_triton.lora_a[adapter_id].data.copy_(layer_ref.lora_a[adapter_id])
+        layer_triton.lora_b[adapter_id].data.copy_(layer_ref.lora_b[adapter_id])
+
+    ranges = [("atlas", 0, 1), ("borealis", 1, 3)]
+    layer_ref.set_active_ranges(ranges)
+    layer_triton.set_active_ranges(ranges)
+    x_ref = torch.randn(3, 4, 8, device="cuda", requires_grad=True)
+    x_triton = x_ref.detach().clone().requires_grad_(True)
+
+    out_ref = layer_ref(x_ref)
+    out_triton = layer_triton(x_triton)
+    out_ref.pow(2).sum().backward()
+    out_triton.pow(2).sum().backward()
+
+    assert layer_triton._can_use_triton_lora(x_triton)
+    assert torch.allclose(out_triton, out_ref, atol=2e-4, rtol=2e-4)
+    assert torch.allclose(x_triton.grad, x_ref.grad, atol=2e-4, rtol=2e-4)
+    for adapter_id in ["atlas", "borealis"]:
+        assert torch.allclose(
+            layer_triton.lora_a[adapter_id].grad,
+            layer_ref.lora_a[adapter_id].grad,
+            atol=2e-4,
+            rtol=2e-4,
+        )
+        assert torch.allclose(
+            layer_triton.lora_b[adapter_id].grad,
+            layer_ref.lora_b[adapter_id].grad,
+            atol=2e-4,
+            rtol=2e-4,
+        )
 
 
 def test_service_reuses_worker_for_matching_base_and_lora_config(monkeypatch, tmp_path):
