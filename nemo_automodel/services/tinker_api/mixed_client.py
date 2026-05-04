@@ -409,6 +409,7 @@ class MixedLoraServiceClient:
         device: Optional[str] = None,
         torch_dtype: str | torch.dtype = "bfloat16",
         trust_remote_code: bool = False,
+        attn_implementation: str = "sdpa",
         lora_config: Optional[LoraConfig] = None,
         mixed_lora_backend: MixedLoraBackend = "loop",
         use_triton_lora: bool = False,
@@ -439,7 +440,7 @@ class MixedLoraServiceClient:
             cache_dir=cache_dir,
             trust_remote_code=trust_remote_code,
             dtype=torch_dtype,
-            attn_implementation="sdpa",
+            attn_implementation=attn_implementation,
         )
         self.model.to(self.device)
         self.model.train()

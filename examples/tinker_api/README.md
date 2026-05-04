@@ -478,6 +478,32 @@ rows serially per adapter/rank/output tile. Treat that as the next kernel
 tuning target rather than assuming the custom kernel is already a performance
 win.
 
+### Nemotron Nano Smoke
+
+The local checkpoint at
+`/home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16` can load through
+the mixed-LoRA prototype with HF remote code when attention is set to `eager`.
+Use a narrow attention-only LoRA target list first:
+
+```bash
+python examples/tinker_api/nemotron_nano_mixed_lora_smoke.py \
+  --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
+  --scratch-dir /home/scratch.asteiner \
+  --cache-dir /home/scratch.asteiner/hf \
+  --rank 8 \
+  --alpha 16 \
+  --steps 1 \
+  --max-tokens 64 \
+  --backend grouped \
+  --torch-dtype bfloat16 \
+  --attn-implementation eager
+```
+
+Initial H200 result: 24 attention projection layers were patched, one mixed
+two-adapter forward/backward + optimizer step completed, and adapter checkpoints
+were saved under `/home/scratch.asteiner/checkpoints/nemotron-nano-atlas-smoke`
+and `/home/scratch.asteiner/checkpoints/nemotron-nano-borealis-smoke`.
+
 ## Next Steps
 
 1. Move GPU request execution into the assigned supervised worker process
