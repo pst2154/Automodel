@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import queue
 import threading
@@ -31,6 +32,7 @@ from nemo_automodel.shared.import_utils import safe_import_from
 
 HAS_FASTAPI, FastAPI = safe_import_from("fastapi", "FastAPI")
 _, HTTPException = safe_import_from("fastapi", "HTTPException")
+_, JSONResponse = safe_import_from("fastapi.responses", "JSONResponse")
 HAS_PYDANTIC, BaseModel = safe_import_from("pydantic", "BaseModel")
 _, Field = safe_import_from("pydantic", "Field")
 
@@ -63,6 +65,7 @@ class CreateRunRequest(BaseModel):
     name: Optional[str] = None
     adapter_id: Optional[str] = None
     checkpoint_path: Optional[str] = None
+    tenant_id: Optional[str] = None
     idempotency_key: Optional[str] = None
 
 
@@ -130,6 +133,7 @@ class TrainStepsRequest(BaseModel):
     eps: float = 1e-8
     save_names: dict[str, str] = Field(default_factory=dict)
     run_async: bool = False
+    tenant_id: Optional[str] = None
     idempotency_key: Optional[str] = None
 
 
@@ -139,6 +143,7 @@ class RunRecord(BaseModel):
     run_id: str
     adapter_id: str
     name: Optional[str] = None
+    tenant_id: Optional[str] = None
     status: str = "created"
     sequence: int = 0
     optimizer_steps: int = 0
@@ -158,6 +163,7 @@ class JobRecord(BaseModel):
     job_id: str
     kind: str
     status: str
+    tenant_id: Optional[str] = None
     sequence: int = 0
     run_ids: list[str] = Field(default_factory=list)
     progress: dict[str, Any] = Field(default_factory=dict)
@@ -341,6 +347,8 @@ def create_app(
     device: Optional[str] = None,
     torch_dtype: str = "bfloat16",
     trust_remote_code: bool = False,
+    api_key: Optional[str] = None,
+    max_resident_adapters: Optional[int] = None,
 ) -> FastAPI:
     """Create a single-process mixed-LoRA FastAPI app."""
     if not HAS_FASTAPI or not HAS_PYDANTIC:
@@ -390,6 +398,19 @@ def create_app(
     executor = QueuedExecutor()
 
     app = FastAPI(title="NeMo AutoModel Tinker API Prototype", version="0.1.0")
+    expected_api_key = api_key or os.environ.get("TINKER_API_KEY")
+
+    if expected_api_key:
+
+        @app.middleware("http")
+        async def require_bearer_token(request, call_next):
+            if request.url.path == "/health":
+                return await call_next(request)
+            authorization = request.headers.get("authorization")
+            expected_authorization = f"Bearer {expected_api_key}"
+            if authorization != expected_authorization:
+                return JSONResponse(status_code=401, content={"detail": "Missing or invalid bearer token"})
+            return await call_next(request)
 
     def get_run(run_id: str) -> MixedLoraTrainingClient:
         client = runs.get(run_id)
@@ -410,6 +431,8 @@ def create_app(
             "run_store": str(run_store.path),
             "job_store": str(job_store.path),
             "idempotency_store": str(idempotency_store.path),
+            "auth_enabled": expected_api_key is not None,
+            "max_resident_adapters": max_resident_adapters,
         }
 
     def get_record(run_id: str) -> RunRecord:
@@ -432,12 +455,22 @@ def create_app(
     def mark_run_failed(run_id: str, exc: Exception) -> None:
         mark_run(run_id, status="failed", error=f"{type(exc).__name__}: {exc}")
 
-    def create_job(kind: str, run_ids: list[str]) -> JobRecord:
+    def tenant_for_runs(run_ids: list[str], requested_tenant_id: Optional[str]) -> Optional[str]:
+        run_tenants = {get_record(run_id).tenant_id for run_id in run_ids}
+        if len(run_tenants) > 1:
+            raise HTTPException(status_code=400, detail="All runs in one job must belong to the same tenant")
+        run_tenant_id = next(iter(run_tenants), None)
+        if requested_tenant_id is not None and run_tenant_id is not None and requested_tenant_id != run_tenant_id:
+            raise HTTPException(status_code=403, detail="Request tenant_id does not match run tenant_id")
+        return requested_tenant_id or run_tenant_id
+
+    def create_job(kind: str, run_ids: list[str], tenant_id: Optional[str]) -> JobRecord:
         now = _utc_now()
         job = JobRecord(
             job_id=f"job_{uuid.uuid4().hex[:12]}",
             kind=kind,
             status="queued",
+            tenant_id=tenant_id,
             run_ids=run_ids,
             created_at=now,
             updated_at=now,
@@ -641,6 +674,11 @@ def create_app(
 
         def op() -> CreateRunResponse:
             try:
+                if max_resident_adapters is not None and len(runs) >= max_resident_adapters:
+                    raise HTTPException(
+                        status_code=429,
+                        detail=f"Resident adapter capacity reached: {len(runs)}/{max_resident_adapters}",
+                    )
                 client = service.create_lora_training_client(
                     adapter_id=request.adapter_id,
                     checkpoint_path=request.checkpoint_path,
@@ -652,6 +690,7 @@ def create_app(
                     run_id=run_id,
                     adapter_id=client.adapter_id,
                     name=request.name,
+                    tenant_id=request.tenant_id,
                     status="ready" if request.checkpoint_path else "created",
                     optimizer_steps=_client_step(client),
                     last_checkpoint_path=request.checkpoint_path,
@@ -709,7 +748,8 @@ def create_app(
         existing = get_idempotent_response("train_steps", request.idempotency_key, request)
         if existing is not None:
             return existing
-        job = create_job("train_steps", list(request.batches))
+        tenant_id = tenant_for_runs(list(request.batches), request.tenant_id)
+        job = create_job("train_steps", list(request.batches), tenant_id)
         if request.run_async:
             future = executor.submit(lambda: run_train_steps(request, job))
 

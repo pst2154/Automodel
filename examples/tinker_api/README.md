@@ -196,7 +196,7 @@ POST /jobs/{job_id}/cancel
 ```
 
 Run records include `status`, `sequence`, `optimizer_steps`,
-`forward_backward_calls`, `last_loss`, `last_metrics`,
+`tenant_id`, `forward_backward_calls`, `last_loss`, `last_metrics`,
 `last_checkpoint_path`, `last_error`, `restored_from`, `created_at`, and
 `updated_at`. State-changing endpoints return both the compact run record and
 the operation output, so clients do not need to make a second call after every
@@ -211,6 +211,21 @@ Mutating endpoints that can safely be retried accept an optional
 `POST /runs/{run_id}/optim_step`, and `POST /runs/{run_id}/save`. Reusing the
 same key with the same payload returns the original response; reusing it with a
 different payload fails with `409`.
+
+For a shared scratch server, start with a bearer token and a resident-adapter
+cap:
+
+```bash
+TINKER_API_KEY=dev-secret \
+python examples/tinker_api/run_mixed_lora_server.py \
+  --base-model Qwen/Qwen3-0.6B \
+  --scratch-dir /home/scratch.asteiner \
+  --cache-dir /home/scratch.asteiner/hf \
+  --max-resident-adapters 8
+```
+
+Clients then pass `--api-key dev-secret`. Runs and `POST /train_steps` can also
+carry a `tenant_id`; one training job may not mix runs from different tenants.
 
 Start the server:
 
@@ -232,7 +247,8 @@ python examples/tinker_api/api_smoke_client.py \
   --base-model Qwen/Qwen3-0.6B \
   --cache-dir /home/scratch.asteiner/hf \
   --steps 20 \
-  --batch-size 1
+  --batch-size 1 \
+  --tenant-id smoke
 ```
 
 For the stronger Qwen learn-and-sample check, run:
@@ -267,6 +283,7 @@ python examples/tinker_api/api_smoke_client.py \
   --lr 1e-3 \
   --max-new-tokens 12 \
   --server-train-steps \
+  --tenant-id smoke \
   --verify-samples
 ```
 
@@ -293,16 +310,16 @@ Restore validates the checkpoint before loading weights. The saved
 alpha, and target modules, and the adapter tensor keys must match the resident
 mixed-LoRA layout.
 
-This API layer is not production hardened. It has no auth, no SQL database, and
-no multi-process worker management yet. Its purpose is to freeze the basic
-Tinker-like HTTP contract around the mixed training worker while keeping the
-implementation pure Python.
+This API layer is not production hardened. It has only simple bearer-token auth,
+no SQL database, and no multi-process worker management yet. Its purpose is to
+freeze the basic Tinker-like HTTP contract around the mixed training worker
+while keeping the implementation pure Python.
 
 ## Next Steps
 
 1. Replace the JSON metadata files with SQLite or Postgres and add stronger
    restart recovery.
-2. Add auth and tenant quotas for shared-GPU use.
+2. Add per-tenant quotas and rate limits for shared-GPU use.
 3. Add built-in RL losses that match Tinker-style `importance_sampling`, `ppo`,
    `cispo`, and `dro` inputs.
 4. Replace serialized adapter swapping with multi-adapter batching or fused LoRA

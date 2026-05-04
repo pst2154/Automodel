@@ -229,3 +229,51 @@ def test_mixed_lora_server_reuses_idempotent_train_steps_response(monkeypatch, t
 
     assert second_response == first_response
     assert client.get(f"/runs/{first['run_id']}").json()["optimizer_steps"] == 2
+
+
+def test_mixed_lora_server_requires_bearer_token_when_configured(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, api_key="secret")
+    client = fastapi_testclient.TestClient(app)
+
+    assert client.get("/health").status_code == 200
+    assert client.post("/runs", json={"name": "atlas"}).status_code == 401
+    authorized = client.post("/runs", json={"name": "atlas"}, headers={"Authorization": "Bearer secret"})
+
+    assert authorized.status_code == 200
+
+
+def test_mixed_lora_server_enforces_resident_adapter_capacity(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, max_resident_adapters=1)
+    client = fastapi_testclient.TestClient(app)
+
+    assert client.post("/runs", json={"name": "atlas"}).status_code == 200
+    response = client.post("/runs", json={"name": "borealis"})
+
+    assert response.status_code == 429
+
+
+def test_mixed_lora_server_records_tenant_and_rejects_mixed_tenant_job(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    first = client.post("/runs", json={"name": "atlas", "tenant_id": "tenant-a"}).json()
+    second = client.post("/runs", json={"name": "borealis", "tenant_id": "tenant-b"}).json()
+
+    record = client.get(f"/runs/{first['run_id']}").json()
+    assert record["tenant_id"] == "tenant-a"
+
+    response = client.post(
+        "/train_steps",
+        json={
+            "batches": {
+                first["run_id"]: [{"model_input": {"tokens": [1, 2, 3]}, "loss_fn_inputs": {}}],
+                second["run_id"]: [{"model_input": {"tokens": [4, 5, 6]}, "loss_fn_inputs": {}}],
+            },
+            "steps": 1,
+            "learning_rate": 0.001,
+        },
+    )
+
+    assert response.status_code == 400

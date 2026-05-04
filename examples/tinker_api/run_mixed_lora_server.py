@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 import uvicorn
 
@@ -30,6 +31,8 @@ def main() -> None:
     parser.add_argument("--alpha", type=int, default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--torch-dtype", default="bfloat16")
+    parser.add_argument("--api-key", default=os.environ.get("TINKER_API_KEY"))
+    parser.add_argument("--max-resident-adapters", type=int, default=None)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18080)
     args = parser.parse_args()
@@ -42,6 +45,8 @@ def main() -> None:
         alpha=args.alpha,
         device=args.device,
         torch_dtype=args.torch_dtype,
+        api_key=args.api_key,
+        max_resident_adapters=args.max_resident_adapters,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 

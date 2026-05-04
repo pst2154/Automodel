@@ -32,29 +32,36 @@ class Example:
     completion: str
 
 
-def post_json(base_url: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _headers(api_key: str | None = None) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def post_json(base_url: str, path: str, payload: dict[str, Any], api_key: str | None = None) -> dict[str, Any]:
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         base_url.rstrip("/") + path,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=_headers(api_key),
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=120) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-def get_json(base_url: str, path: str) -> dict[str, Any]:
-    request = urllib.request.Request(base_url.rstrip("/") + path, method="GET")
+def get_json(base_url: str, path: str, api_key: str | None = None) -> dict[str, Any]:
+    request = urllib.request.Request(base_url.rstrip("/") + path, headers=_headers(api_key), method="GET")
     with urllib.request.urlopen(request, timeout=120) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-def wait_for_server(base_url: str, timeout_s: int) -> None:
+def wait_for_server(base_url: str, timeout_s: int, api_key: str | None = None) -> None:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         try:
-            get_json(base_url, "/health")
+            get_json(base_url, "/health", api_key)
             return
         except (urllib.error.URLError, TimeoutError):
             time.sleep(1)
@@ -90,20 +97,25 @@ def main() -> None:
     parser.add_argument("--atlas-checkpoint", default=None)
     parser.add_argument("--borealis-checkpoint", default=None)
     parser.add_argument("--server-train-steps", action="store_true")
+    parser.add_argument("--api-key", default=None)
+    parser.add_argument("--tenant-id", default=None)
     args = parser.parse_args()
 
     if args.wait_for_server > 0:
-        wait_for_server(args.base_url, args.wait_for_server)
+        wait_for_server(args.base_url, args.wait_for_server, args.api_key)
 
     tokenizer = AutoTokenizer.from_pretrained(args.base_model, cache_dir=args.cache_dir)
     atlas_payload = {"name": "atlas"}
     borealis_payload = {"name": "borealis"}
+    if args.tenant_id:
+        atlas_payload["tenant_id"] = args.tenant_id
+        borealis_payload["tenant_id"] = args.tenant_id
     if args.atlas_checkpoint:
         atlas_payload["checkpoint_path"] = args.atlas_checkpoint
     if args.borealis_checkpoint:
         borealis_payload["checkpoint_path"] = args.borealis_checkpoint
-    atlas = post_json(args.base_url, "/runs", atlas_payload)
-    borealis = post_json(args.base_url, "/runs", borealis_payload)
+    atlas = post_json(args.base_url, "/runs", atlas_payload, args.api_key)
+    borealis = post_json(args.base_url, "/runs", borealis_payload, args.api_key)
 
     atlas_datum = build_datum(
         tokenizer,
@@ -127,6 +139,7 @@ def main() -> None:
                 "temperature": 1.0,
                 "top_p": 1.0,
             },
+            args.api_key,
         )
         return response["output"]["text"]
 
@@ -150,7 +163,9 @@ def main() -> None:
                     atlas["run_id"]: "api-smoke-atlas",
                     borealis["run_id"]: "api-smoke-borealis",
                 },
+                "tenant_id": args.tenant_id,
             },
+            args.api_key,
         )
         first_losses = train_response["job"]["result"]["first_losses"]
         last_losses = train_response["job"]["result"]["last_losses"]
@@ -169,21 +184,31 @@ def main() -> None:
                         borealis["run_id"]: [borealis_datum] * args.batch_size,
                     }
                 },
+                args.api_key,
             )
-            post_json(args.base_url, f"/runs/{atlas['run_id']}/optim_step", {"learning_rate": args.lr})
-            post_json(args.base_url, f"/runs/{borealis['run_id']}/optim_step", {"learning_rate": args.lr})
+            post_json(args.base_url, f"/runs/{atlas['run_id']}/optim_step", {"learning_rate": args.lr}, args.api_key)
+            post_json(
+                args.base_url,
+                f"/runs/{borealis['run_id']}/optim_step",
+                {"learning_rate": args.lr},
+                args.api_key,
+            )
             losses = (mixed[atlas["run_id"]]["output"]["loss"], mixed[borealis["run_id"]]["output"]["loss"])
             first = first or losses
             last = losses
             if args.sample_every > 0 and (step + 1) % args.sample_every == 0:
                 print(f"step={step + 1} losses={losses}")
 
-        atlas_save = post_json(args.base_url, f"/runs/{atlas['run_id']}/save", {"name": "api-smoke-atlas"})
-        borealis_save = post_json(args.base_url, f"/runs/{borealis['run_id']}/save", {"name": "api-smoke-borealis"})
+        atlas_save = post_json(
+            args.base_url, f"/runs/{atlas['run_id']}/save", {"name": "api-smoke-atlas"}, args.api_key
+        )
+        borealis_save = post_json(
+            args.base_url, f"/runs/{borealis['run_id']}/save", {"name": "api-smoke-borealis"}, args.api_key
+        )
     atlas_after = sample(atlas, atlas_prompt)
     borealis_after = sample(borealis, borealis_prompt)
-    atlas_state = get_json(args.base_url, f"/runs/{atlas['run_id']}")
-    borealis_state = get_json(args.base_url, f"/runs/{borealis['run_id']}")
+    atlas_state = get_json(args.base_url, f"/runs/{atlas['run_id']}", args.api_key)
+    borealis_state = get_json(args.base_url, f"/runs/{borealis['run_id']}", args.api_key)
 
     print(f"atlas_run={atlas['run_id']} adapter={atlas['adapter_id']}")
     print(f"borealis_run={borealis['run_id']} adapter={borealis['adapter_id']}")
