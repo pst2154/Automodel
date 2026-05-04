@@ -116,6 +116,28 @@ adapter_1_loss=...
 adapter_2_loss=...
 ```
 
+To train two Qwen LoRA adapters long enough to learn separate toy tasks:
+
+```bash
+python examples/tinker_api/train_two_lora_tasks.py \
+  --base-model Qwen/Qwen3-0.6B \
+  --scratch-dir /home/scratch.asteiner \
+  --cache-dir /home/scratch.asteiner/hf \
+  --steps 250 \
+  --batch-size 4 \
+  --lr 1e-3 \
+  --rank 16 \
+  --force-hf
+```
+
+On `4u8g-gen-0277`, this run produced `shared_worker=True`, drove both
+adapter eval losses to approximately zero, and saved:
+
+```text
+/home/scratch.asteiner/checkpoints/qwen-two-lora-atlas
+/home/scratch.asteiner/checkpoints/qwen-two-lora-borealis
+```
+
 ## Next Steps
 
 1. Add a process-local request queue around the shared worker.
