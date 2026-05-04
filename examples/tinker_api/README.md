@@ -44,8 +44,9 @@ small compatibility smoke-test path.
 - Optional local worker-process supervision via `--worker-processes`.
 - Durable worker placement metadata on each run when worker processes are
   configured.
-- Worker management IPC via `POST /workers/{worker_id}/ping`, proving the HTTP
-  service can route commands into a specific supervised process.
+- Worker management IPC via `POST /workers/{worker_id}/ping` and
+  `POST /workers/{worker_id}/echo`, proving the HTTP service can route
+  serialized commands into a specific supervised process.
 - Tiny GPU smoke tests in the `nvcr.io/nvidia/nemo-automodel:26.04` container.
 
 ## Current Limits
@@ -470,6 +471,12 @@ python examples/tinker_api/benchmark_mixed_lora_backends.py \
   --out-features 2048 \
   --rank 16
 ```
+
+An initial H200 smoke run at that shape showed `grouped` faster than `loop`,
+while `grouped_triton` was slower because its adapter-gradient kernels scan
+rows serially per adapter/rank/output tile. Treat that as the next kernel
+tuning target rather than assuming the custom kernel is already a performance
+win.
 
 ## Next Steps
 

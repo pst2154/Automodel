@@ -41,12 +41,15 @@ def _rpc_worker(stop_event, command_queue, result_queue) -> None:
             continue
         request_id = request.get("request_id")
         command = request.get("command")
+        payload = request.get("payload", {})
         try:
             if command == "ping":
                 response = {
                     "worker_pid": os.getpid(),
                     "time": time.time(),
                 }
+            elif command == "echo":
+                response = {"payload": payload}
             elif command == "stop":
                 stop_event.set()
                 response = {"stopping": True}
@@ -122,7 +125,7 @@ class ProcessWorkerManager:
     def stop(self) -> None:
         """Stop all managed worker processes."""
         for slot in list(self._slots.values()):
-            self._submit_to_slot(slot, "stop", timeout_seconds=0.25, raise_on_error=False)
+            self._submit_to_slot(slot, "stop", payload=None, timeout_seconds=0.25, raise_on_error=False)
             slot.stop_event.set()
         deadline = time.monotonic() + self.stop_timeout_seconds
         for slot in list(self._slots.values()):
@@ -171,14 +174,27 @@ class ProcessWorkerManager:
         index = int.from_bytes(digest[:8], byteorder="big") % len(running)
         return sorted(running, key=lambda record: record.worker_id)[index]
 
-    def submit(self, worker_id: str, command: str, *, timeout_seconds: float = 30.0) -> dict[str, Any]:
+    def submit(
+        self,
+        worker_id: str,
+        command: str,
+        *,
+        payload: Optional[dict[str, Any]] = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
         """Submit a management command to a worker process and return its result."""
         slot = self._slots.get(worker_id)
         if slot is None:
             raise KeyError(f"Unknown worker_id: {worker_id}")
         if not slot.process.is_alive():
             raise RuntimeError(f"Worker {worker_id!r} is not running")
-        return self._submit_to_slot(slot, command, timeout_seconds=timeout_seconds, raise_on_error=True)
+        return self._submit_to_slot(
+            slot,
+            command,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+            raise_on_error=True,
+        )
 
     def _restart_count(self, worker_id: str) -> int:
         slot = self._slots.get(worker_id)
@@ -214,11 +230,12 @@ class ProcessWorkerManager:
         slot: _WorkerSlot,
         command: str,
         *,
+        payload: Optional[dict[str, Any]] = None,
         timeout_seconds: float,
         raise_on_error: bool,
     ) -> dict[str, Any]:
         request_id = f"req_{time.monotonic_ns()}"
-        slot.command_queue.put({"request_id": request_id, "command": command})
+        slot.command_queue.put({"request_id": request_id, "command": command, "payload": payload or {}})
         deadline = time.monotonic() + timeout_seconds
         parked_results = []
         while time.monotonic() < deadline:
