@@ -34,6 +34,12 @@ def main() -> None:
     parser.add_argument("--api-key", default=os.environ.get("TINKER_API_KEY"))
     parser.add_argument("--max-resident-adapters", type=int, default=None)
     parser.add_argument(
+        "--metadata-backend",
+        choices=("sqlite", "json"),
+        default="sqlite",
+        help="Persistent metadata store backend.",
+    )
+    parser.add_argument(
         "--mixed-lora-backend",
         choices=("loop", "grouped", "triton"),
         default="loop",
@@ -60,6 +66,7 @@ def main() -> None:
         max_resident_adapters=args.max_resident_adapters,
         mixed_lora_backend=args.mixed_lora_backend,
         use_triton_lora=args.use_triton_lora,
+        metadata_backend=args.metadata_backend,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 

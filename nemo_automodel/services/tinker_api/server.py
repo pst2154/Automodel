@@ -18,13 +18,14 @@ import json
 import os
 import pathlib
 import queue
+import sqlite3
 import threading
 import uuid
 from concurrent.futures import Future
 from dataclasses import asdict
 from datetime import datetime, timezone
 from hashlib import sha256
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from nemo_automodel.services.tinker_api.mixed_client import (
     MixedLoraBackend,
@@ -39,6 +40,8 @@ _, HTTPException = safe_import_from("fastapi", "HTTPException")
 _, JSONResponse = safe_import_from("fastapi.responses", "JSONResponse")
 HAS_PYDANTIC, BaseModel = safe_import_from("pydantic", "BaseModel")
 _, Field = safe_import_from("pydantic", "Field")
+
+MetadataBackend = Literal["sqlite", "json"]
 
 if not HAS_PYDANTIC:  # pragma: no cover
 
@@ -308,6 +311,73 @@ class JsonStore:
         tmp_path.replace(self.path)
 
 
+class SQLiteStore:
+    """SQLite-backed metadata store for service records."""
+
+    def __init__(self, path: str | pathlib.Path, key: str, record_type):
+        self.path = pathlib.Path(path)
+        self.key = key
+        self.record_type = record_type
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+
+    def _init_db(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS records (
+                    namespace TEXT NOT NULL,
+                    record_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (namespace, record_id)
+                )
+                """
+            )
+
+    def load(self) -> dict[str, Any]:
+        """Load known records from SQLite."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT record_id, payload FROM records WHERE namespace = ? ORDER BY record_id",
+                (self.key,),
+            ).fetchall()
+        return {record_id: self.record_type(**json.loads(payload)) for record_id, payload in rows}
+
+    def save(self, records: dict[str, Any]) -> None:
+        """Persist records in one transaction."""
+        rows = [
+            (self.key, record_id, json.dumps(_model_to_dict(record), sort_keys=True), _utc_now())
+            for record_id, record in records.items()
+        ]
+        with self._connect() as conn:
+            conn.execute("DELETE FROM records WHERE namespace = ?", (self.key,))
+            conn.executemany(
+                "INSERT INTO records(namespace, record_id, payload, updated_at) VALUES (?, ?, ?, ?)",
+                rows,
+            )
+
+
+def _build_store(
+    *,
+    scratch_dir: str,
+    backend: MetadataBackend,
+    key: str,
+    record_type,
+):
+    if backend == "sqlite":
+        return SQLiteStore(pathlib.Path(scratch_dir) / "tinker_api" / "metadata.sqlite3", key, record_type)
+    if backend == "json":
+        return JsonStore(pathlib.Path(scratch_dir) / "tinker_api" / f"{key}.json", key, record_type)
+    raise ValueError(f"Unknown metadata backend: {backend}")
+
+
 class QueuedExecutor:
     """One-thread executor that serializes all GPU-owned service operations."""
 
@@ -355,10 +425,13 @@ def create_app(
     max_resident_adapters: Optional[int] = None,
     mixed_lora_backend: MixedLoraBackend = "loop",
     use_triton_lora: bool = False,
+    metadata_backend: MetadataBackend = "sqlite",
 ) -> FastAPI:
     """Create a single-process mixed-LoRA FastAPI app."""
     if not HAS_FASTAPI or not HAS_PYDANTIC:
         raise ImportError("The Tinker API server requires `fastapi` and `pydantic`. Install the service extras first.")
+    if metadata_backend not in {"sqlite", "json"}:
+        raise ValueError(f"Unknown metadata backend: {metadata_backend}")
 
     service = MixedLoraServiceClient(
         base_model=base_model,
@@ -372,10 +445,13 @@ def create_app(
         use_triton_lora=use_triton_lora,
     )
     active_mixed_lora_backend = "triton" if use_triton_lora else mixed_lora_backend
-    run_store = JsonStore(pathlib.Path(scratch_dir) / "tinker_api" / "runs.json", "runs", RunRecord)
-    job_store = JsonStore(pathlib.Path(scratch_dir) / "tinker_api" / "jobs.json", "jobs", JobRecord)
-    idempotency_store = JsonStore(
-        pathlib.Path(scratch_dir) / "tinker_api" / "idempotency.json", "idempotency", IdempotencyRecord
+    run_store = _build_store(scratch_dir=scratch_dir, backend=metadata_backend, key="runs", record_type=RunRecord)
+    job_store = _build_store(scratch_dir=scratch_dir, backend=metadata_backend, key="jobs", record_type=JobRecord)
+    idempotency_store = _build_store(
+        scratch_dir=scratch_dir,
+        backend=metadata_backend,
+        key="idempotency",
+        record_type=IdempotencyRecord,
     )
     records: dict[str, RunRecord] = run_store.load()
     for record in records.values():
@@ -444,6 +520,7 @@ def create_app(
             "max_resident_adapters": max_resident_adapters,
             "mixed_lora_backend": active_mixed_lora_backend,
             "use_triton_lora": use_triton_lora,
+            "metadata_backend": metadata_backend,
         }
 
     def get_record(run_id: str) -> RunRecord:

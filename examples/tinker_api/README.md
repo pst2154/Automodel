@@ -200,11 +200,11 @@ Run records include `status`, `sequence`, `optimizer_steps`,
 `last_checkpoint_path`, `last_error`, `restored_from`, `created_at`, and
 `updated_at`. State-changing endpoints return both the compact run record and
 the operation output, so clients do not need to make a second call after every
-training step. Metadata is persisted to
-`$SCRATCH/tinker_api/runs.json` and job metadata is persisted to
-`$SCRATCH/tinker_api/jobs.json`; after a server restart, previously known runs
-are listed as `detached` until a new resident adapter is created from a
-checkpoint.
+training step. Metadata is persisted to SQLite by default at
+`$SCRATCH/tinker_api/metadata.sqlite3`; after a server restart, previously
+known runs are listed as `detached` until a new resident adapter is created
+from a checkpoint. For debugging, the server can still use the old JSON files
+with `--metadata-backend json`.
 
 Mutating endpoints that can safely be retried accept an optional
 `idempotency_key`: `POST /runs`, `POST /train_steps`,
@@ -312,9 +312,9 @@ alpha, and target modules, and the adapter tensor keys must match the resident
 mixed-LoRA layout.
 
 This API layer is not production hardened. It has only simple bearer-token auth,
-no SQL database, and no multi-process worker management yet. Its purpose is to
-freeze the basic Tinker-like HTTP contract around the mixed training worker
-while keeping the implementation pure Python.
+no distributed worker management yet, and only lightweight SQLite metadata. Its
+purpose is to freeze the basic Tinker-like HTTP contract around the mixed
+training worker while keeping the implementation pure Python.
 
 ### Mixed-LoRA Backends
 
@@ -372,8 +372,8 @@ delta path and, later, the small-adapter optimizer path.
 
 ## Next Steps
 
-1. Replace the JSON metadata files with SQLite or Postgres and add stronger
-   restart recovery.
+1. Add stronger restart recovery for resident adapter rehydration and active
+   job continuation.
 2. Add per-tenant quotas and rate limits for shared-GPU use.
 3. Add built-in RL losses that match Tinker-style `importance_sampling`, `ppo`,
    `cispo`, and `dro` inputs.

@@ -80,6 +80,7 @@ def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch, tmp_path):
     health = client.get("/health").json()
     assert health["use_triton_lora"] is True
     assert health["mixed_lora_backend"] == "triton"
+    assert health["metadata_backend"] == "sqlite"
 
     first = client.post("/runs", json={"name": "atlas"}).json()
     second = client.post("/runs", json={"name": "borealis"}).json()
@@ -141,6 +142,19 @@ def test_mixed_lora_server_marks_persisted_runs_detached(monkeypatch, tmp_path):
 
     record = restarted_client.get(f"/runs/{created['run_id']}").json()
     assert record["status"] == "detached"
+
+
+def test_mixed_lora_server_can_use_json_metadata_backend(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, metadata_backend="json")
+    client = fastapi_testclient.TestClient(app)
+
+    created = client.post("/runs", json={"name": "json-run"}).json()
+    health = client.get("/health").json()
+
+    assert created["status"] == "created"
+    assert health["metadata_backend"] == "json"
+    assert (tmp_path / "tinker_api" / "runs.json").exists()
 
 
 def test_mixed_lora_server_runs_server_owned_train_steps(monkeypatch, tmp_path):
