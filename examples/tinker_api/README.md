@@ -138,6 +138,38 @@ adapter eval losses to approximately zero, and saved:
 /home/scratch.asteiner/checkpoints/qwen-two-lora-borealis
 ```
 
+## Experimental Mixed-Batch MultiLoRA
+
+The serialized prototype above proves the Tinker-style control plane. The
+experimental mixed-batch path in `mixed_client.py` is closer to mLoRA: multiple
+adapters are resident in the model at the same time, and one concatenated batch
+routes row ranges to different adapters during the same forward/backward pass.
+
+```bash
+python examples/tinker_api/mixed_lora_qwen.py \
+  --base-model Qwen/Qwen3-0.6B \
+  --scratch-dir /home/scratch.asteiner \
+  --cache-dir /home/scratch.asteiner/hf \
+  --steps 160 \
+  --batch-size 2 \
+  --lr 1e-3 \
+  --rank 16
+```
+
+On `4u8g-gen-0277`, this produced:
+
+```text
+mixed_batch=True
+atlas_loss before=6.3113 first_step=6.1240 last_step=0.0000 after=0.0000
+borealis_loss before=5.8499 first_step=5.9166 last_step=0.0000 after=0.0000
+/home/scratch.asteiner/checkpoints/mixed-qwen-atlas
+/home/scratch.asteiner/checkpoints/mixed-qwen-borealis
+```
+
+This mixed path is intentionally single-node and pure PyTorch. It is useful for
+validating the runtime shape, but production throughput would still need grouped
+or fused LoRA kernels and distributed-aware adapter sharding.
+
 ## Next Steps
 
 1. Add a process-local request queue around the shared worker.

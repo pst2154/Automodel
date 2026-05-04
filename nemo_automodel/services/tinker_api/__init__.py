@@ -15,6 +15,7 @@
 """A small Tinker-like training API prototype backed by NeMo AutoModel."""
 
 from nemo_automodel.services.tinker_api.client import SamplingClient, ServiceClient, TrainingClient
+from nemo_automodel.services.tinker_api.mixed_client import MixedLoraServiceClient, MixedLoraTrainingClient
 from nemo_automodel.services.tinker_api.types import (
     AdamParams,
     Datum,
@@ -40,4 +41,6 @@ __all__ = [
     "SaveStateResponse",
     "ServiceClient",
     "TrainingClient",
+    "MixedLoraServiceClient",
+    "MixedLoraTrainingClient",
 ]
