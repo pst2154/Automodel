@@ -87,14 +87,22 @@ def main() -> None:
     parser.add_argument("--sample-every", type=int, default=0)
     parser.add_argument("--max-new-tokens", type=int, default=12)
     parser.add_argument("--verify-samples", action="store_true")
+    parser.add_argument("--atlas-checkpoint", default=None)
+    parser.add_argument("--borealis-checkpoint", default=None)
     args = parser.parse_args()
 
     if args.wait_for_server > 0:
         wait_for_server(args.base_url, args.wait_for_server)
 
     tokenizer = AutoTokenizer.from_pretrained(args.base_model, cache_dir=args.cache_dir)
-    atlas = post_json(args.base_url, "/runs", {"name": "atlas"})
-    borealis = post_json(args.base_url, "/runs", {"name": "borealis"})
+    atlas_payload = {"name": "atlas"}
+    borealis_payload = {"name": "borealis"}
+    if args.atlas_checkpoint:
+        atlas_payload["checkpoint_path"] = args.atlas_checkpoint
+    if args.borealis_checkpoint:
+        borealis_payload["checkpoint_path"] = args.borealis_checkpoint
+    atlas = post_json(args.base_url, "/runs", atlas_payload)
+    borealis = post_json(args.base_url, "/runs", borealis_payload)
 
     atlas_datum = build_datum(
         tokenizer,

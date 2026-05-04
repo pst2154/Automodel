@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
+
 import pytest
 
 from nemo_automodel.services.tinker_api import server
@@ -27,12 +29,14 @@ fastapi_testclient = pytest.importorskip("fastapi.testclient")
 
 
 class FakeTrainingClient:
-    def __init__(self, service, adapter_id):
+    def __init__(self, service, adapter_id, step=0):
         self.service = service
         self.adapter_id = adapter_id
+        self.handle = SimpleNamespace(step=step)
 
     def optim_step(self, adam_params):
         self.service.steps[self.adapter_id] += 1
+        self.handle.step = self.service.steps[self.adapter_id]
         return APIFuture(
             OptimStepResponse(step=self.service.steps[self.adapter_id], learning_rate=adam_params.learning_rate)
         )
@@ -46,11 +50,13 @@ class FakeMixedLoraServiceClient:
         self.created = 0
         self.steps = {}
 
-    def create_lora_training_client(self):
+    def create_lora_training_client(self, *, adapter_id=None, checkpoint_path=None):
         self.created += 1
-        adapter_id = f"adapter_{self.created}"
+        adapter_id = adapter_id or f"adapter_{self.created}"
         self.steps[adapter_id] = 0
-        return FakeTrainingClient(self, adapter_id)
+        if checkpoint_path is not None:
+            self.steps[adapter_id] = 7
+        return FakeTrainingClient(self, adapter_id, step=self.steps[adapter_id])
 
     def forward_backward_mixed(self, batches_by_adapter, loss_fn):
         outputs = {}
@@ -66,9 +72,9 @@ class FakeMixedLoraServiceClient:
         return APIFuture(SampleResponse(tokens=[1, 2, 3], text=f"{prompt} {adapter_id}"))
 
 
-def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch):
+def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
-    app = server.create_app(base_model="fake-model")
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
     client = fastapi_testclient.TestClient(app)
 
     first = client.post("/runs", json={"name": "atlas"}).json()
@@ -101,3 +107,33 @@ def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch):
     record = client.get(f"/runs/{first['run_id']}").json()
     assert record["sequence"] >= 4
     assert record["last_checkpoint_path"] == "/tmp/atlas-test"
+
+
+def test_mixed_lora_server_restores_run_metadata(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+
+    restored = client.post(
+        "/runs",
+        json={"name": "restored", "adapter_id": "adapter_restored", "checkpoint_path": "/tmp/checkpoint"},
+    ).json()
+
+    record = client.get(f"/runs/{restored['run_id']}").json()
+    assert restored["adapter_id"] == "adapter_restored"
+    assert restored["status"] == "ready"
+    assert record["optimizer_steps"] == 7
+    assert record["restored_from"] == "/tmp/checkpoint"
+
+
+def test_mixed_lora_server_marks_persisted_runs_detached(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    created = client.post("/runs", json={"name": "atlas"}).json()
+
+    restarted = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    restarted_client = fastapi_testclient.TestClient(restarted)
+
+    record = restarted_client.get(f"/runs/{created['run_id']}").json()
+    assert record["status"] == "detached"

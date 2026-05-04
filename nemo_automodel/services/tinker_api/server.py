@@ -14,7 +14,12 @@
 
 from __future__ import annotations
 
+import json
+import pathlib
+import queue
+import threading
 import uuid
+from concurrent.futures import Future
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -55,6 +60,8 @@ class CreateRunRequest(BaseModel):
     """Create one resident LoRA adapter run."""
 
     name: Optional[str] = None
+    adapter_id: Optional[str] = None
+    checkpoint_path: Optional[str] = None
 
 
 class CreateRunResponse(BaseModel):
@@ -120,6 +127,7 @@ class RunRecord(BaseModel):
     last_metrics: dict[str, float] = Field(default_factory=dict)
     last_checkpoint_path: Optional[str] = None
     last_error: Optional[str] = None
+    restored_from: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -185,6 +193,74 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _model_to_dict(model: BaseModel) -> dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()
+
+
+def _client_step(client: MixedLoraTrainingClient) -> int:
+    handle = getattr(client, "handle", None)
+    return int(getattr(handle, "step", 0))
+
+
+class RunStore:
+    """Small JSON-backed run metadata store for the prototype service."""
+
+    def __init__(self, path: str | pathlib.Path):
+        self.path = pathlib.Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def load(self) -> dict[str, RunRecord]:
+        """Load known run records from disk."""
+        if not self.path.exists():
+            return {}
+        with self.path.open("r", encoding="utf-8") as fp:
+            payload = json.load(fp)
+        return {run_id: RunRecord(**record) for run_id, record in payload.get("runs", {}).items()}
+
+    def save(self, records: dict[str, RunRecord]) -> None:
+        """Persist run records atomically."""
+        payload = {"runs": {run_id: _model_to_dict(record) for run_id, record in records.items()}}
+        tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
+        with tmp_path.open("w", encoding="utf-8") as fp:
+            json.dump(payload, fp, indent=2, sort_keys=True)
+        tmp_path.replace(self.path)
+
+
+class QueuedExecutor:
+    """One-thread executor that serializes all GPU-owned service operations."""
+
+    def __init__(self):
+        self._queue: queue.Queue[tuple[Future, Any]] = queue.Queue()
+        self._thread = threading.Thread(target=self._worker, name="tinker-api-worker", daemon=True)
+        self._thread.start()
+
+    def submit(self, fn):
+        """Run `fn` on the worker thread and return a Future."""
+        future = Future()
+        self._queue.put((future, fn))
+        return future
+
+    def queue_depth(self) -> int:
+        """Return approximate queued operation count."""
+        return self._queue.qsize()
+
+    def is_alive(self) -> bool:
+        """Return whether the worker thread is alive."""
+        return self._thread.is_alive()
+
+    def _worker(self) -> None:
+        while True:
+            future, fn = self._queue.get()
+            if future.set_running_or_notify_cancel():
+                try:
+                    future.set_result(fn())
+                except Exception as exc:
+                    future.set_exception(exc)
+            self._queue.task_done()
+
+
 def create_app(
     *,
     base_model: str,
@@ -209,8 +285,17 @@ def create_app(
         trust_remote_code=trust_remote_code,
         lora_config=LoraConfig(rank=rank, alpha=alpha),
     )
+    run_store = RunStore(pathlib.Path(scratch_dir) / "tinker_api" / "runs.json")
+    records: dict[str, RunRecord] = run_store.load()
+    for record in records.values():
+        if record.status not in {"failed", "detached"}:
+            record.status = "detached"
+            record.updated_at = _utc_now()
+    if records:
+        run_store.save(records)
     runs: dict[str, MixedLoraTrainingClient] = {}
-    records: dict[str, RunRecord] = {}
+    records_lock = threading.RLock()
+    executor = QueuedExecutor()
 
     app = FastAPI(title="NeMo AutoModel Tinker API Prototype", version="0.1.0")
 
@@ -226,46 +311,71 @@ def create_app(
             "status": "ok",
             "base_model": base_model,
             "num_runs": len(runs),
+            "num_records": len(records),
             "mode": "mixed_lora_single_process",
+            "queue_depth": executor.queue_depth(),
+            "worker_alive": executor.is_alive(),
+            "run_store": str(run_store.path),
         }
 
     def get_record(run_id: str) -> RunRecord:
-        record = records.get(run_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
-        return record
+        with records_lock:
+            record = records.get(run_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
+            return record
 
     def mark_run(run_id: str, *, status: str, error: Optional[str] = None) -> RunRecord:
-        record = get_record(run_id)
-        record.status = status
-        record.last_error = error
-        record.sequence += 1
-        record.updated_at = _utc_now()
-        return record
+        with records_lock:
+            record = get_record(run_id)
+            record.status = status
+            record.last_error = error
+            record.sequence += 1
+            record.updated_at = _utc_now()
+            run_store.save(records)
+            return record
 
     def mark_run_failed(run_id: str, exc: Exception) -> None:
         mark_run(run_id, status="failed", error=f"{type(exc).__name__}: {exc}")
 
     @app.post("/runs", response_model=CreateRunResponse)
     def create_run(request: CreateRunRequest) -> CreateRunResponse:
-        client = service.create_lora_training_client()
-        run_id = f"run_{uuid.uuid4().hex[:12]}"
-        runs[run_id] = client
-        now = _utc_now()
-        records[run_id] = RunRecord(
-            run_id=run_id, adapter_id=client.adapter_id, name=request.name, created_at=now, updated_at=now
-        )
-        return CreateRunResponse(
-            run_id=run_id,
-            adapter_id=client.adapter_id,
-            name=request.name,
-            status=records[run_id].status,
-            sequence=records[run_id].sequence,
-        )
+        def op() -> CreateRunResponse:
+            client = service.create_lora_training_client(
+                adapter_id=request.adapter_id,
+                checkpoint_path=request.checkpoint_path,
+            )
+            run_id = f"run_{uuid.uuid4().hex[:12]}"
+            runs[run_id] = client
+            now = _utc_now()
+            record = RunRecord(
+                run_id=run_id,
+                adapter_id=client.adapter_id,
+                name=request.name,
+                status="ready" if request.checkpoint_path else "created",
+                optimizer_steps=_client_step(client),
+                last_checkpoint_path=request.checkpoint_path,
+                restored_from=request.checkpoint_path,
+                created_at=now,
+                updated_at=now,
+            )
+            with records_lock:
+                records[run_id] = record
+                run_store.save(records)
+            return CreateRunResponse(
+                run_id=run_id,
+                adapter_id=client.adapter_id,
+                name=request.name,
+                status=record.status,
+                sequence=record.sequence,
+            )
+
+        return executor.submit(op).result()
 
     @app.get("/runs", response_model=list[RunRecord])
     def list_runs() -> list[RunRecord]:
-        return list(records.values())
+        with records_lock:
+            return list(records.values())
 
     @app.get("/runs/{run_id}", response_model=RunRecord)
     def get_run_record(run_id: str) -> RunRecord:
@@ -273,84 +383,103 @@ def create_app(
 
     @app.post("/runs/{run_id}/forward_backward")
     def forward_backward(run_id: str, request: ForwardBackwardRequest) -> ForwardBackwardResponse:
-        client = get_run(run_id)
-        try:
-            mark_run(run_id, status="running")
-            data = [_datum_from_request(datum) for datum in request.data]
-            output = service.forward_backward_mixed({client.adapter_id: data}, request.loss_fn).result()[
-                client.adapter_id
-            ]
-            record = mark_run(run_id, status="ready")
-            record.forward_backward_calls += 1
-            record.last_loss = output.loss
-            record.last_metrics = dict(output.metrics)
-            return ForwardBackwardResponse(run=record, output=asdict(output))
-        except Exception as exc:
-            mark_run_failed(run_id, exc)
-            raise
-
-    @app.post("/mixed_forward_backward")
-    def mixed_forward_backward(request: MixedForwardBackwardRequest) -> dict[str, ForwardBackwardResponse]:
-        batches_by_adapter = {}
-        run_to_adapter = {}
-        active_run_ids = list(request.batches)
-        try:
-            for run_id, batch in request.batches.items():
+        def op() -> ForwardBackwardResponse:
+            client = get_run(run_id)
+            try:
                 mark_run(run_id, status="running")
-                client = get_run(run_id)
-                batches_by_adapter[client.adapter_id] = [_datum_from_request(datum) for datum in batch]
-                run_to_adapter[run_id] = client.adapter_id
-            outputs = service.forward_backward_mixed(batches_by_adapter, request.loss_fn).result()
-            responses = {}
-            for run_id, adapter_id in run_to_adapter.items():
-                output = outputs[adapter_id]
+                data = [_datum_from_request(datum) for datum in request.data]
+                output = service.forward_backward_mixed({client.adapter_id: data}, request.loss_fn).result()[
+                    client.adapter_id
+                ]
                 record = mark_run(run_id, status="ready")
                 record.forward_backward_calls += 1
                 record.last_loss = output.loss
                 record.last_metrics = dict(output.metrics)
-                responses[run_id] = ForwardBackwardResponse(run=record, output=asdict(output))
-            return responses
-        except Exception as exc:
-            for run_id in active_run_ids:
-                if run_id in records:
-                    mark_run_failed(run_id, exc)
-            raise
+                run_store.save(records)
+                return ForwardBackwardResponse(run=record, output=asdict(output))
+            except Exception as exc:
+                mark_run_failed(run_id, exc)
+                raise
+
+        return executor.submit(op).result()
+
+    @app.post("/mixed_forward_backward")
+    def mixed_forward_backward(request: MixedForwardBackwardRequest) -> dict[str, ForwardBackwardResponse]:
+        def op() -> dict[str, ForwardBackwardResponse]:
+            batches_by_adapter = {}
+            run_to_adapter = {}
+            active_run_ids = list(request.batches)
+            try:
+                for run_id, batch in request.batches.items():
+                    mark_run(run_id, status="running")
+                    client = get_run(run_id)
+                    batches_by_adapter[client.adapter_id] = [_datum_from_request(datum) for datum in batch]
+                    run_to_adapter[run_id] = client.adapter_id
+                outputs = service.forward_backward_mixed(batches_by_adapter, request.loss_fn).result()
+                responses = {}
+                for run_id, adapter_id in run_to_adapter.items():
+                    output = outputs[adapter_id]
+                    record = mark_run(run_id, status="ready")
+                    record.forward_backward_calls += 1
+                    record.last_loss = output.loss
+                    record.last_metrics = dict(output.metrics)
+                    run_store.save(records)
+                    responses[run_id] = ForwardBackwardResponse(run=record, output=asdict(output))
+                return responses
+            except Exception as exc:
+                for run_id in active_run_ids:
+                    if run_id in records:
+                        mark_run_failed(run_id, exc)
+                raise
+
+        return executor.submit(op).result()
 
     @app.post("/runs/{run_id}/optim_step")
     def optim_step(run_id: str, request: OptimStepRequest) -> OptimStepResponseModel:
-        client = get_run(run_id)
-        try:
-            mark_run(run_id, status="optimizing")
-            output = client.optim_step(_adam_from_request(request)).result()
-            record = mark_run(run_id, status="ready")
-            record.optimizer_steps = output.step
-            return OptimStepResponseModel(run=record, output=asdict(output))
-        except Exception as exc:
-            mark_run_failed(run_id, exc)
-            raise
+        def op() -> OptimStepResponseModel:
+            client = get_run(run_id)
+            try:
+                mark_run(run_id, status="optimizing")
+                output = client.optim_step(_adam_from_request(request)).result()
+                record = mark_run(run_id, status="ready")
+                record.optimizer_steps = output.step
+                run_store.save(records)
+                return OptimStepResponseModel(run=record, output=asdict(output))
+            except Exception as exc:
+                mark_run_failed(run_id, exc)
+                raise
+
+        return executor.submit(op).result()
 
     @app.post("/runs/{run_id}/save")
     def save(run_id: str, request: SaveRequest) -> SaveResponse:
-        client = get_run(run_id)
-        try:
-            mark_run(run_id, status="saving")
-            output = client.save_state(request.name).result()
-            record = mark_run(run_id, status="ready")
-            record.last_checkpoint_path = output.path
-            return SaveResponse(run=record, output=asdict(output))
-        except Exception as exc:
-            mark_run_failed(run_id, exc)
-            raise
+        def op() -> SaveResponse:
+            client = get_run(run_id)
+            try:
+                mark_run(run_id, status="saving")
+                output = client.save_state(request.name).result()
+                record = mark_run(run_id, status="ready")
+                record.last_checkpoint_path = output.path
+                run_store.save(records)
+                return SaveResponse(run=record, output=asdict(output))
+            except Exception as exc:
+                mark_run_failed(run_id, exc)
+                raise
+
+        return executor.submit(op).result()
 
     @app.post("/runs/{run_id}/sample")
     def sample(run_id: str, request: SampleRequest) -> SampleResponseModel:
-        client = get_run(run_id)
-        try:
-            output = service.sample(client.adapter_id, request.prompt, _sampling_from_request(request)).result()
-            record = mark_run(run_id, status="ready")
-            return SampleResponseModel(run=record, output=asdict(output))
-        except Exception as exc:
-            mark_run_failed(run_id, exc)
-            raise
+        def op() -> SampleResponseModel:
+            client = get_run(run_id)
+            try:
+                output = service.sample(client.adapter_id, request.prompt, _sampling_from_request(request)).result()
+                record = mark_run(run_id, status="ready")
+                return SampleResponseModel(run=record, output=asdict(output))
+            except Exception as exc:
+                mark_run_failed(run_id, exc)
+                raise
+
+        return executor.submit(op).result()
 
     return app

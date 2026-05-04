@@ -127,6 +127,11 @@ class MixedAdapterLinearLoRA(nn.Module):
             f"{prefix}.lora_b": self.lora_b[adapter_id].detach().cpu(),
         }
 
+    def load_adapter_state_dict(self, adapter_id: str, prefix: str, state: dict[str, torch.Tensor]) -> None:
+        """Load one adapter's weights for this layer."""
+        self.lora_a[adapter_id].data.copy_(state[f"{prefix}.lora_a"].to(self.lora_a[adapter_id].device))
+        self.lora_b[adapter_id].data.copy_(state[f"{prefix}.lora_b"].to(self.lora_b[adapter_id].device))
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply the base linear layer and the selected LoRA adapters."""
         result = self.base_linear(x)
@@ -221,13 +226,19 @@ class MixedLoraServiceClient:
             raise ValueError("No target nn.Linear modules were found for mixed LoRA")
         return layers
 
-    def create_lora_training_client(self) -> "MixedLoraTrainingClient":
+    def create_lora_training_client(
+        self, *, adapter_id: Optional[str] = None, checkpoint_path: Optional[str | pathlib.Path] = None
+    ) -> "MixedLoraTrainingClient":
         """Create one resident LoRA adapter training client."""
-        adapter_id = f"adapter_{uuid.uuid4().hex[:12]}"
+        adapter_id = adapter_id or f"adapter_{uuid.uuid4().hex[:12]}"
+        if adapter_id in self.adapters:
+            raise ValueError(f"Adapter already exists: {adapter_id}")
         for layer in self.mixed_lora_layers.values():
             layer.add_adapter(adapter_id)
         handle = MixedAdapterHandle(adapter_id=adapter_id)
         self.adapters[adapter_id] = handle
+        if checkpoint_path is not None:
+            self.load_adapter_state(adapter_id, checkpoint_path)
         return MixedLoraTrainingClient(service=self, handle=handle)
 
     def _set_active_ranges(self, ranges: list[tuple[str, int, int]]) -> None:
@@ -247,6 +258,28 @@ class MixedLoraServiceClient:
         for name, layer in self.mixed_lora_layers.items():
             state.update(layer.adapter_state_dict(adapter_id, name))
         return state
+
+    def load_adapter_state(self, adapter_id: str, checkpoint_path: str | pathlib.Path) -> None:
+        """Load adapter weights and optimizer state from a checkpoint directory."""
+        checkpoint_dir = pathlib.Path(checkpoint_path)
+        state_path = checkpoint_dir / "adapter_model.pt"
+        if not state_path.exists():
+            raise FileNotFoundError(f"Missing adapter checkpoint: {state_path}")
+        state = torch.load(state_path, map_location=self.device)
+        for name, layer in self.mixed_lora_layers.items():
+            layer.load_adapter_state_dict(adapter_id, name, state)
+
+        handle = self.adapters[adapter_id]
+        config_path = checkpoint_dir / "adapter_config.json"
+        if config_path.exists():
+            with config_path.open("r", encoding="utf-8") as fp:
+                config = json.load(fp)
+            handle.step = int(config.get("step", 0))
+
+        optimizer_path = checkpoint_dir / "optimizer.pt"
+        if optimizer_path.exists():
+            handle.optimizer = torch.optim.AdamW(self.adapter_parameters(adapter_id))
+            handle.optimizer.load_state_dict(torch.load(optimizer_path, map_location=self.device))
 
     def forward_backward_mixed(
         self,

@@ -174,8 +174,10 @@ or fused LoRA kernels and distributed-aware adapter sharding.
 ## HTTP API Prototype
 
 The experimental branch also includes a thin FastAPI wrapper around the
-single-process mixed-LoRA worker. It is intentionally in-memory and single-node,
-but it exposes the first real service contract:
+single-process mixed-LoRA worker. It is intentionally single-node, but it now
+has the first service-shaped pieces: a worker queue that serializes GPU
+operations, JSON-backed run metadata, checkpoint restore, and a compact HTTP
+contract:
 
 ```text
 GET  /health
@@ -191,9 +193,13 @@ POST /runs/{run_id}/sample
 
 Run records include `status`, `sequence`, `optimizer_steps`,
 `forward_backward_calls`, `last_loss`, `last_metrics`,
-`last_checkpoint_path`, `last_error`, `created_at`, and `updated_at`.
-State-changing endpoints return both the compact run record and the operation
-output, so clients do not need to make a second call after every training step.
+`last_checkpoint_path`, `last_error`, `restored_from`, `created_at`, and
+`updated_at`. State-changing endpoints return both the compact run record and
+the operation output, so clients do not need to make a second call after every
+training step. Metadata is persisted to
+`$SCRATCH/tinker_api/runs.json`; after a server restart, previously known runs
+are listed as `detached` until a new resident adapter is created from a
+checkpoint.
 
 Start the server:
 
@@ -237,17 +243,32 @@ examples through one `POST /mixed_forward_backward` call per step, steps each
 adapter independently, samples both adapters, verifies the expected route
 strings, and saves separate checkpoints.
 
+To restore those saved adapters in a fresh server process:
+
+```bash
+python examples/tinker_api/api_smoke_client.py \
+  --base-url http://127.0.0.1:18080 \
+  --base-model Qwen/Qwen3-0.6B \
+  --cache-dir /home/scratch.asteiner/hf \
+  --steps 0 \
+  --atlas-checkpoint /home/scratch.asteiner/checkpoints/api-smoke-atlas \
+  --borealis-checkpoint /home/scratch.asteiner/checkpoints/api-smoke-borealis \
+  --verify-samples
+```
+
 This API layer is not production hardened. It has no auth, no durable DB, no
-background queue, no cancellation, and no multi-process worker management yet.
-Its purpose is to freeze the basic Tinker-like HTTP contract around the mixed
-training worker.
+SQL database, no cancellation, and no multi-process worker management yet. Its
+purpose is to freeze the basic Tinker-like HTTP contract around the mixed
+training worker while keeping the implementation pure Python.
 
 ## Next Steps
 
-1. Add a process-local request queue around the shared worker.
-2. Add durable run metadata and restart recovery.
+1. Add async job endpoints so clients can submit long-running work without
+   holding the HTTP connection open.
+2. Replace the JSON metadata file with SQLite or Postgres and add stronger
+   restart recovery.
 3. Add built-in RL losses that match Tinker-style `importance_sampling`, `ppo`,
    `cispo`, and `dro` inputs.
 4. Replace serialized adapter swapping with multi-adapter batching or fused LoRA
    kernels inspired by mLoRA.
-5. Add checkpoint restore APIs for adapter and optimizer state.
+5. Add cancellation, idempotency keys, auth, and tenant quotas.
