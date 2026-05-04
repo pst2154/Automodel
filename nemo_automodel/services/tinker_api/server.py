@@ -20,7 +20,9 @@ import pathlib
 import queue
 import sqlite3
 import threading
+import time
 import uuid
+from collections import deque
 from concurrent.futures import Future
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -423,6 +425,8 @@ def create_app(
     trust_remote_code: bool = False,
     api_key: Optional[str] = None,
     max_resident_adapters: Optional[int] = None,
+    max_runs_per_tenant: Optional[int] = None,
+    tenant_rate_limit_per_minute: Optional[int] = None,
     mixed_lora_backend: MixedLoraBackend = "loop",
     use_triton_lora: bool = False,
     metadata_backend: MetadataBackend = "sqlite",
@@ -432,6 +436,10 @@ def create_app(
         raise ImportError("The Tinker API server requires `fastapi` and `pydantic`. Install the service extras first.")
     if metadata_backend not in {"sqlite", "json"}:
         raise ValueError(f"Unknown metadata backend: {metadata_backend}")
+    if max_runs_per_tenant is not None and max_runs_per_tenant <= 0:
+        raise ValueError("max_runs_per_tenant must be positive")
+    if tenant_rate_limit_per_minute is not None and tenant_rate_limit_per_minute <= 0:
+        raise ValueError("tenant_rate_limit_per_minute must be positive")
 
     service = MixedLoraServiceClient(
         base_model=base_model,
@@ -480,6 +488,8 @@ def create_app(
     records_lock = threading.RLock()
     jobs_lock = threading.RLock()
     idempotency_lock = threading.RLock()
+    rate_limit_lock = threading.RLock()
+    tenant_request_times: dict[str, deque[float]] = {}
     executor = QueuedExecutor()
 
     app = FastAPI(title="NeMo AutoModel Tinker API Prototype", version="0.1.0")
@@ -518,10 +528,51 @@ def create_app(
             "idempotency_store": str(idempotency_store.path),
             "auth_enabled": expected_api_key is not None,
             "max_resident_adapters": max_resident_adapters,
+            "max_runs_per_tenant": max_runs_per_tenant,
+            "tenant_rate_limit_per_minute": tenant_rate_limit_per_minute,
             "mixed_lora_backend": active_mixed_lora_backend,
             "use_triton_lora": use_triton_lora,
             "metadata_backend": metadata_backend,
         }
+
+    def tenant_key(tenant_id: Optional[str]) -> str:
+        return tenant_id or "_default"
+
+    def enforce_tenant_rate_limit(tenant_id: Optional[str], operation: str) -> None:
+        if tenant_rate_limit_per_minute is None:
+            return
+        key = tenant_key(tenant_id)
+        now = time.monotonic()
+        window_start = now - 60.0
+        with rate_limit_lock:
+            request_times = tenant_request_times.setdefault(key, deque())
+            while request_times and request_times[0] < window_start:
+                request_times.popleft()
+            if len(request_times) >= tenant_rate_limit_per_minute:
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        f"Tenant {key!r} exceeded {tenant_rate_limit_per_minute} "
+                        f"requests/minute for GPU operation {operation!r}"
+                    ),
+                )
+            request_times.append(now)
+
+    def enforce_tenant_run_quota(tenant_id: Optional[str]) -> None:
+        if max_runs_per_tenant is None:
+            return
+        key = tenant_key(tenant_id)
+        with records_lock:
+            resident_count = sum(
+                1
+                for run_id, record in records.items()
+                if run_id in runs and tenant_key(record.tenant_id) == key and record.status != "detached"
+            )
+        if resident_count >= max_runs_per_tenant:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Tenant {key!r} resident adapter capacity reached: {resident_count}/{max_runs_per_tenant}",
+            )
 
     def get_record(run_id: str) -> RunRecord:
         with records_lock:
@@ -759,6 +810,7 @@ def create_app(
         existing = get_idempotent_response("create_run", request.idempotency_key, request)
         if existing is not None:
             return existing
+        enforce_tenant_rate_limit(request.tenant_id, "create_run")
 
         def op() -> CreateRunResponse:
             try:
@@ -767,6 +819,7 @@ def create_app(
                         status_code=429,
                         detail=f"Resident adapter capacity reached: {len(runs)}/{max_resident_adapters}",
                     )
+                enforce_tenant_run_quota(request.tenant_id)
                 client = service.create_lora_training_client(
                     adapter_id=request.adapter_id,
                     checkpoint_path=request.checkpoint_path,
@@ -837,6 +890,7 @@ def create_app(
         if existing is not None:
             return existing
         tenant_id = tenant_for_runs(list(request.batches), request.tenant_id)
+        enforce_tenant_rate_limit(tenant_id, "train_steps")
         job = create_job("train_steps", list(request.batches), tenant_id)
         if request.run_async:
             future = executor.submit(lambda: run_train_steps(request, job))
@@ -861,6 +915,8 @@ def create_app(
 
     @app.post("/runs/{run_id}/forward_backward")
     def forward_backward(run_id: str, request: ForwardBackwardRequest) -> ForwardBackwardResponse:
+        enforce_tenant_rate_limit(get_record(run_id).tenant_id, "forward_backward")
+
         def op() -> ForwardBackwardResponse:
             client = get_run(run_id)
             try:
@@ -883,6 +939,9 @@ def create_app(
 
     @app.post("/mixed_forward_backward")
     def mixed_forward_backward(request: MixedForwardBackwardRequest) -> dict[str, ForwardBackwardResponse]:
+        tenant_id = tenant_for_runs(list(request.batches), None)
+        enforce_tenant_rate_limit(tenant_id, "mixed_forward_backward")
+
         def op() -> dict[str, ForwardBackwardResponse]:
             batches_by_adapter = {}
             run_to_adapter = {}
@@ -917,6 +976,7 @@ def create_app(
         existing = get_idempotent_response(f"optim_step:{run_id}", request.idempotency_key, request)
         if existing is not None:
             return existing
+        enforce_tenant_rate_limit(get_record(run_id).tenant_id, "optim_step")
 
         def op() -> OptimStepResponseModel:
             client = get_run(run_id)
@@ -941,6 +1001,7 @@ def create_app(
         existing = get_idempotent_response(f"save:{run_id}", request.idempotency_key, request)
         if existing is not None:
             return existing
+        enforce_tenant_rate_limit(get_record(run_id).tenant_id, "save")
 
         def op() -> SaveResponse:
             client = get_run(run_id)
@@ -962,6 +1023,8 @@ def create_app(
 
     @app.post("/runs/{run_id}/sample")
     def sample(run_id: str, request: SampleRequest) -> SampleResponseModel:
+        enforce_tenant_rate_limit(get_record(run_id).tenant_id, "sample")
+
         def op() -> SampleResponseModel:
             client = get_run(run_id)
             try:

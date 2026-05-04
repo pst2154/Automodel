@@ -222,11 +222,16 @@ python examples/tinker_api/run_mixed_lora_server.py \
   --scratch-dir /home/scratch.asteiner \
   --cache-dir /home/scratch.asteiner/hf \
   --mixed-lora-backend grouped \
-  --max-resident-adapters 8
+  --max-resident-adapters 8 \
+  --max-runs-per-tenant 2 \
+  --tenant-rate-limit-per-minute 120
 ```
 
 Clients then pass `--api-key dev-secret`. Runs and `POST /train_steps` can also
 carry a `tenant_id`; one training job may not mix runs from different tenants.
+The server enforces both the global resident-adapter cap and the optional
+per-tenant resident-run and requests-per-minute caps. Requests without a
+`tenant_id` share a `_default` tenant bucket.
 
 Start the server:
 
@@ -374,9 +379,8 @@ delta path and, later, the small-adapter optimizer path.
 
 1. Add stronger restart recovery for resident adapter rehydration and active
    job continuation.
-2. Add per-tenant quotas and rate limits for shared-GPU use.
-3. Add built-in RL losses that match Tinker-style `importance_sampling`, `ppo`,
+2. Add built-in RL losses that match Tinker-style `importance_sampling`, `ppo`,
    `cispo`, and `dro` inputs.
-4. Replace per-range LoRA launches with grouped mixed-adapter LoRA kernels
+3. Replace per-range LoRA launches with grouped mixed-adapter LoRA kernels
    inspired by mLoRA.
-5. Add multi-process worker management.
+4. Add multi-process worker management.

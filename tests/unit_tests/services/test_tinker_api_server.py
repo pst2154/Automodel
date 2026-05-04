@@ -81,6 +81,8 @@ def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch, tmp_path):
     assert health["use_triton_lora"] is True
     assert health["mixed_lora_backend"] == "triton"
     assert health["metadata_backend"] == "sqlite"
+    assert health["max_runs_per_tenant"] is None
+    assert health["tenant_rate_limit_per_minute"] is None
 
     first = client.post("/runs", json={"name": "atlas"}).json()
     second = client.post("/runs", json={"name": "borealis"}).json()
@@ -270,6 +272,33 @@ def test_mixed_lora_server_enforces_resident_adapter_capacity(monkeypatch, tmp_p
     response = client.post("/runs", json={"name": "borealis"})
 
     assert response.status_code == 429
+
+
+def test_mixed_lora_server_enforces_tenant_adapter_capacity(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, max_runs_per_tenant=1)
+    client = fastapi_testclient.TestClient(app)
+
+    assert client.post("/runs", json={"name": "atlas", "tenant_id": "tenant-a"}).status_code == 200
+    assert client.post("/runs", json={"name": "borealis", "tenant_id": "tenant-b"}).status_code == 200
+    response = client.post("/runs", json={"name": "orion", "tenant_id": "tenant-a"})
+
+    assert response.status_code == 429
+    assert "tenant-a" in response.json()["detail"]
+
+
+def test_mixed_lora_server_rate_limits_tenant_gpu_operations(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, tenant_rate_limit_per_minute=2)
+    client = fastapi_testclient.TestClient(app)
+    created = client.post("/runs", json={"name": "atlas", "tenant_id": "tenant-a"}).json()
+
+    first = client.post(f"/runs/{created['run_id']}/sample", json={"prompt": "hello"})
+    second = client.post(f"/runs/{created['run_id']}/sample", json={"prompt": "again"})
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert "tenant-a" in second.json()["detail"]
 
 
 def test_mixed_lora_server_records_tenant_and_rejects_mixed_tenant_job(monkeypatch, tmp_path):

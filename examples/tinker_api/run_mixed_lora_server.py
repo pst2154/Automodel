@@ -33,6 +33,8 @@ def main() -> None:
     parser.add_argument("--torch-dtype", default="bfloat16")
     parser.add_argument("--api-key", default=os.environ.get("TINKER_API_KEY"))
     parser.add_argument("--max-resident-adapters", type=int, default=None)
+    parser.add_argument("--max-runs-per-tenant", type=int, default=None)
+    parser.add_argument("--tenant-rate-limit-per-minute", type=int, default=None)
     parser.add_argument(
         "--metadata-backend",
         choices=("sqlite", "json"),
@@ -64,6 +66,8 @@ def main() -> None:
         torch_dtype=args.torch_dtype,
         api_key=args.api_key,
         max_resident_adapters=args.max_resident_adapters,
+        max_runs_per_tenant=args.max_runs_per_tenant,
+        tenant_rate_limit_per_minute=args.tenant_rate_limit_per_minute,
         mixed_lora_backend=args.mixed_lora_backend,
         use_triton_lora=args.use_triton_lora,
         metadata_backend=args.metadata_backend,
