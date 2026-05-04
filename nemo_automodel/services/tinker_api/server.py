@@ -26,7 +26,11 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any, Optional
 
-from nemo_automodel.services.tinker_api.mixed_client import MixedLoraServiceClient, MixedLoraTrainingClient
+from nemo_automodel.services.tinker_api.mixed_client import (
+    MixedLoraBackend,
+    MixedLoraServiceClient,
+    MixedLoraTrainingClient,
+)
 from nemo_automodel.services.tinker_api.types import AdamParams, Datum, LoraConfig, ModelInput, SamplingParams
 from nemo_automodel.shared.import_utils import safe_import_from
 
@@ -349,6 +353,7 @@ def create_app(
     trust_remote_code: bool = False,
     api_key: Optional[str] = None,
     max_resident_adapters: Optional[int] = None,
+    mixed_lora_backend: MixedLoraBackend = "loop",
     use_triton_lora: bool = False,
 ) -> FastAPI:
     """Create a single-process mixed-LoRA FastAPI app."""
@@ -363,8 +368,10 @@ def create_app(
         torch_dtype=torch_dtype,
         trust_remote_code=trust_remote_code,
         lora_config=LoraConfig(rank=rank, alpha=alpha),
+        mixed_lora_backend=mixed_lora_backend,
         use_triton_lora=use_triton_lora,
     )
+    active_mixed_lora_backend = "triton" if use_triton_lora else mixed_lora_backend
     run_store = JsonStore(pathlib.Path(scratch_dir) / "tinker_api" / "runs.json", "runs", RunRecord)
     job_store = JsonStore(pathlib.Path(scratch_dir) / "tinker_api" / "jobs.json", "jobs", JobRecord)
     idempotency_store = JsonStore(
@@ -435,6 +442,7 @@ def create_app(
             "idempotency_store": str(idempotency_store.path),
             "auth_enabled": expected_api_key is not None,
             "max_resident_adapters": max_resident_adapters,
+            "mixed_lora_backend": active_mixed_lora_backend,
             "use_triton_lora": use_triton_lora,
         }
 

@@ -221,7 +221,7 @@ python examples/tinker_api/run_mixed_lora_server.py \
   --base-model Qwen/Qwen3-0.6B \
   --scratch-dir /home/scratch.asteiner \
   --cache-dir /home/scratch.asteiner/hf \
-  --use-triton-lora \
+  --mixed-lora-backend grouped \
   --max-resident-adapters 8
 ```
 
@@ -316,10 +316,19 @@ no SQL database, and no multi-process worker management yet. Its purpose is to
 freeze the basic Tinker-like HTTP contract around the mixed training worker
 while keeping the implementation pure Python.
 
-### Kernel Path
+### Mixed-LoRA Backends
 
-The prototype can optionally route each active adapter range through
-AutoModel's existing PEFT `LoRATritonFunction`:
+The prototype now has three backend modes for the adapter delta inside each
+patched linear layer:
+
+- `loop`: original PyTorch implementation, one adapter range at a time.
+- `grouped`: vectorized PyTorch reference path that stacks selected adapter
+  weights and computes all active row deltas in one batched operation.
+- `triton`: AutoModel's existing PEFT `LoRATritonFunction`, called once per
+  active adapter range.
+
+Use the grouped reference path when you want to mimic the shape of an mLoRA
+grouped kernel without compiling a new kernel:
 
 ```bash
 python examples/tinker_api/run_mixed_lora_server.py \
@@ -327,13 +336,24 @@ python examples/tinker_api/run_mixed_lora_server.py \
   --scratch-dir /home/scratch.asteiner \
   --cache-dir /home/scratch.asteiner/hf \
   --rank 16 \
-  --use-triton-lora
+  --mixed-lora-backend grouped
 ```
 
-That compiled path covers the LoRA delta for one adapter range at a time and
-includes backward. It is a useful bridge, but it is not the final production
-kernel shape: the current mixed worker still loops over active ranges inside
-each patched linear layer.
+Use the Triton bridge when you want the existing compiled LoRA kernels:
+
+```bash
+python examples/tinker_api/run_mixed_lora_server.py \
+  --base-model Qwen/Qwen3-0.6B \
+  --scratch-dir /home/scratch.asteiner \
+  --cache-dir /home/scratch.asteiner/hf \
+  --rank 16 \
+  --mixed-lora-backend triton
+```
+
+The `triton` path covers the LoRA delta for one adapter range at a time and
+includes backward. The `grouped` path is closer to the desired production
+kernel contract, but it still relies on PyTorch batched operations and dynamic
+weight stacking.
 
 The production kernels that remain are:
 

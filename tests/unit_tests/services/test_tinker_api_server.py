@@ -79,6 +79,7 @@ def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch, tmp_path):
 
     health = client.get("/health").json()
     assert health["use_triton_lora"] is True
+    assert health["mixed_lora_backend"] == "triton"
 
     first = client.post("/runs", json={"name": "atlas"}).json()
     second = client.post("/runs", json={"name": "borealis"}).json()

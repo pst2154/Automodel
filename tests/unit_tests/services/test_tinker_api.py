@@ -59,6 +59,55 @@ def test_mixed_lora_layer_routes_ranges_with_torch_fallback():
     assert torch.allclose(out, torch.tensor([[12.0, 3.0], [7.0, 59.0]]))
 
 
+def test_mixed_lora_layer_grouped_backend_matches_loop_forward_backward():
+    torch.manual_seed(1234)
+    base_loop = torch.nn.Linear(8, 6, bias=False)
+    base_grouped = torch.nn.Linear(8, 6, bias=False)
+    base_grouped.weight.data.copy_(base_loop.weight)
+
+    layer_loop = MixedAdapterLinearLoRA(
+        base_loop,
+        rank=2,
+        alpha=4,
+        dropout=0.0,
+        lora_dtype=torch.float32,
+        backend="loop",
+    )
+    layer_grouped = MixedAdapterLinearLoRA(
+        base_grouped,
+        rank=2,
+        alpha=4,
+        dropout=0.0,
+        lora_dtype=torch.float32,
+        backend="grouped",
+    )
+    for adapter_id in ["atlas", "borealis"]:
+        layer_loop.add_adapter(adapter_id)
+        layer_grouped.add_adapter(adapter_id)
+        layer_loop.lora_a[adapter_id].data.normal_(mean=0.0, std=0.05)
+        layer_loop.lora_b[adapter_id].data.normal_(mean=0.0, std=0.05)
+        layer_grouped.lora_a[adapter_id].data.copy_(layer_loop.lora_a[adapter_id])
+        layer_grouped.lora_b[adapter_id].data.copy_(layer_loop.lora_b[adapter_id])
+
+    ranges = [("atlas", 0, 2), ("borealis", 2, 4)]
+    layer_loop.set_active_ranges(ranges)
+    layer_grouped.set_active_ranges(ranges)
+    x_loop = torch.randn(4, 5, 8, requires_grad=True)
+    x_grouped = x_loop.detach().clone().requires_grad_(True)
+
+    out_loop = layer_loop(x_loop)
+    out_grouped = layer_grouped(x_grouped)
+    out_loop.pow(2).sum().backward()
+    out_grouped.pow(2).sum().backward()
+
+    assert layer_grouped._can_use_grouped_lora(x_grouped)
+    assert torch.allclose(out_grouped, out_loop)
+    assert torch.allclose(x_grouped.grad, x_loop.grad)
+    for adapter_id in ["atlas", "borealis"]:
+        assert torch.allclose(layer_grouped.lora_a[adapter_id].grad, layer_loop.lora_a[adapter_id].grad)
+        assert torch.allclose(layer_grouped.lora_b[adapter_id].grad, layer_loop.lora_b[adapter_id].grad)
+
+
 @pytest.mark.run_only_on("GPU")
 def test_mixed_lora_layer_triton_bridge_matches_torch_forward_backward():
     torch.manual_seed(1234)
