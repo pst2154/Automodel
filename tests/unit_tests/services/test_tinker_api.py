@@ -17,6 +17,7 @@ import torch
 from nemo_automodel.services.tinker_api import client as tinker_client
 from nemo_automodel.services.tinker_api.client import _build_batch
 from nemo_automodel.services.tinker_api.future import APIFuture
+from nemo_automodel.services.tinker_api.mixed_client import MixedLoraServiceClient
 from nemo_automodel.services.tinker_api.types import Datum, ModelInput
 
 
@@ -83,3 +84,28 @@ def test_service_separates_workers_for_different_lora_config(monkeypatch, tmp_pa
 
     assert first.worker is not second.worker
     assert len(created_workers) == 2
+
+
+def test_mixed_lora_checkpoint_validation_rejects_wrong_base_model(tmp_path):
+    service = MixedLoraServiceClient.__new__(MixedLoraServiceClient)
+    service.base_model = "expected-model"
+    service.lora_config = type(
+        "FakeLoraConfig",
+        (),
+        {"rank": 16, "alpha": None, "target_modules": []},
+    )()
+
+    try:
+        service._validate_checkpoint_config(
+            {
+                "base_model": "other-model",
+                "rank": 16,
+                "alpha": None,
+                "target_modules": ["*_proj"],
+            },
+            tmp_path,
+        )
+    except ValueError as exc:
+        assert "base_model" in str(exc)
+    else:
+        raise AssertionError("Expected checkpoint validation to reject mismatched base model")

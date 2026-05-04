@@ -187,3 +187,45 @@ def test_mixed_lora_server_submits_async_train_job(monkeypatch, tmp_path):
 
     job = client.get(f"/jobs/{submitted['job']['job_id']}").json()
     assert job["status"] in {"queued", "running", "succeeded"}
+
+
+def test_mixed_lora_server_reuses_idempotent_create_response(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+
+    first = client.post("/runs", json={"name": "atlas", "idempotency_key": "create-atlas"}).json()
+    second = client.post("/runs", json={"name": "atlas", "idempotency_key": "create-atlas"}).json()
+
+    assert second == first
+    assert len(client.get("/runs").json()) == 1
+
+
+def test_mixed_lora_server_rejects_idempotency_key_reuse_for_different_request(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+
+    assert client.post("/runs", json={"name": "atlas", "idempotency_key": "same-key"}).status_code == 200
+    response = client.post("/runs", json={"name": "borealis", "idempotency_key": "same-key"})
+
+    assert response.status_code == 409
+
+
+def test_mixed_lora_server_reuses_idempotent_train_steps_response(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    first = client.post("/runs", json={"name": "atlas"}).json()
+
+    payload = {
+        "batches": {first["run_id"]: [{"model_input": {"tokens": [1, 2, 3]}, "loss_fn_inputs": {}}]},
+        "steps": 2,
+        "learning_rate": 0.001,
+        "idempotency_key": "train-atlas",
+    }
+    first_response = client.post("/train_steps", json=payload).json()
+    second_response = client.post("/train_steps", json=payload).json()
+
+    assert second_response == first_response
+    assert client.get(f"/runs/{first['run_id']}").json()["optimizer_steps"] == 2

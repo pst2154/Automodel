@@ -22,6 +22,7 @@ import uuid
 from concurrent.futures import Future
 from dataclasses import asdict
 from datetime import datetime, timezone
+from hashlib import sha256
 from typing import Any, Optional
 
 from nemo_automodel.services.tinker_api.mixed_client import MixedLoraServiceClient, MixedLoraTrainingClient
@@ -62,6 +63,7 @@ class CreateRunRequest(BaseModel):
     name: Optional[str] = None
     adapter_id: Optional[str] = None
     checkpoint_path: Optional[str] = None
+    idempotency_key: Optional[str] = None
 
 
 class CreateRunResponse(BaseModel):
@@ -95,12 +97,14 @@ class OptimStepRequest(BaseModel):
     weight_decay: float = 0.0
     betas: tuple[float, float] = (0.9, 0.999)
     eps: float = 1e-8
+    idempotency_key: Optional[str] = None
 
 
 class SaveRequest(BaseModel):
     """Save request."""
 
     name: str
+    idempotency_key: Optional[str] = None
 
 
 class SampleRequest(BaseModel):
@@ -126,6 +130,7 @@ class TrainStepsRequest(BaseModel):
     eps: float = 1e-8
     save_names: dict[str, str] = Field(default_factory=dict)
     run_async: bool = False
+    idempotency_key: Optional[str] = None
 
 
 class RunRecord(BaseModel):
@@ -157,6 +162,19 @@ class JobRecord(BaseModel):
     run_ids: list[str] = Field(default_factory=list)
     progress: dict[str, Any] = Field(default_factory=dict)
     result: Optional[dict[str, Any]] = None
+    error: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class IdempotencyRecord(BaseModel):
+    """Stored response for a retryable mutating request."""
+
+    key: str
+    operation: str
+    fingerprint: str
+    status: str
+    response: Optional[dict[str, Any]] = None
     error: Optional[str] = None
     created_at: str
     updated_at: str
@@ -248,6 +266,12 @@ def _client_step(client: MixedLoraTrainingClient) -> int:
     return int(getattr(handle, "step", 0))
 
 
+def _fingerprint_request(operation: str, request: BaseModel) -> str:
+    payload = {"operation": operation, "request": _model_to_dict(request)}
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
 class JsonStore:
     """Small JSON-backed metadata store for the prototype service."""
 
@@ -333,6 +357,9 @@ def create_app(
     )
     run_store = JsonStore(pathlib.Path(scratch_dir) / "tinker_api" / "runs.json", "runs", RunRecord)
     job_store = JsonStore(pathlib.Path(scratch_dir) / "tinker_api" / "jobs.json", "jobs", JobRecord)
+    idempotency_store = JsonStore(
+        pathlib.Path(scratch_dir) / "tinker_api" / "idempotency.json", "idempotency", IdempotencyRecord
+    )
     records: dict[str, RunRecord] = run_store.load()
     for record in records.values():
         if record.status not in {"failed", "detached"}:
@@ -349,8 +376,17 @@ def create_app(
             job.updated_at = _utc_now()
     if jobs:
         job_store.save(jobs)
+    idempotency_records: dict[str, IdempotencyRecord] = idempotency_store.load()
+    for idem_record in idempotency_records.values():
+        if idem_record.status == "running":
+            idem_record.status = "failed"
+            idem_record.error = "Request was interrupted by service restart"
+            idem_record.updated_at = _utc_now()
+    if idempotency_records:
+        idempotency_store.save(idempotency_records)
     records_lock = threading.RLock()
     jobs_lock = threading.RLock()
+    idempotency_lock = threading.RLock()
     executor = QueuedExecutor()
 
     app = FastAPI(title="NeMo AutoModel Tinker API Prototype", version="0.1.0")
@@ -373,6 +409,7 @@ def create_app(
             "worker_alive": executor.is_alive(),
             "run_store": str(run_store.path),
             "job_store": str(job_store.path),
+            "idempotency_store": str(idempotency_store.path),
         }
 
     def get_record(run_id: str) -> RunRecord:
@@ -442,6 +479,71 @@ def create_app(
 
     def fail_job(job_id: str, exc: Exception) -> None:
         mark_job(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
+
+    def get_idempotent_response(operation: str, key: Optional[str], request: BaseModel) -> Optional[dict[str, Any]]:
+        if key is None:
+            return None
+        fingerprint = _fingerprint_request(operation, request)
+        with idempotency_lock:
+            record = idempotency_records.get(key)
+            if record is None:
+                now = _utc_now()
+                idempotency_records[key] = IdempotencyRecord(
+                    key=key,
+                    operation=operation,
+                    fingerprint=fingerprint,
+                    status="running",
+                    created_at=now,
+                    updated_at=now,
+                )
+                idempotency_store.save(idempotency_records)
+                return None
+            if record.operation != operation or record.fingerprint != fingerprint:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Idempotency key {key!r} was already used for a different request",
+                )
+            if record.status == "succeeded" and record.response is not None:
+                return record.response
+            if record.status == "failed":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Previous request for idempotency key {key!r} failed: {record.error}",
+                )
+            raise HTTPException(status_code=409, detail=f"Request for idempotency key {key!r} is still running")
+
+    def store_idempotent_response(operation: str, key: Optional[str], request: BaseModel, response: Any) -> None:
+        if key is None:
+            return
+        fingerprint = _fingerprint_request(operation, request)
+        with idempotency_lock:
+            idempotency_records[key] = IdempotencyRecord(
+                key=key,
+                operation=operation,
+                fingerprint=fingerprint,
+                status="succeeded",
+                response=_model_to_dict(response) if isinstance(response, BaseModel) else response,
+                created_at=idempotency_records[key].created_at,
+                updated_at=_utc_now(),
+            )
+            idempotency_store.save(idempotency_records)
+
+    def store_idempotent_error(operation: str, key: Optional[str], request: BaseModel, exc: Exception) -> None:
+        if key is None:
+            return
+        fingerprint = _fingerprint_request(operation, request)
+        with idempotency_lock:
+            created_at = idempotency_records[key].created_at
+            idempotency_records[key] = IdempotencyRecord(
+                key=key,
+                operation=operation,
+                fingerprint=fingerprint,
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}",
+                created_at=created_at,
+                updated_at=_utc_now(),
+            )
+            idempotency_store.save(idempotency_records)
 
     def run_train_steps(request: TrainStepsRequest, job: JobRecord) -> TrainStepsResponse:
         run_ids = list(request.batches)
@@ -533,35 +635,45 @@ def create_app(
 
     @app.post("/runs", response_model=CreateRunResponse)
     def create_run(request: CreateRunRequest) -> CreateRunResponse:
+        existing = get_idempotent_response("create_run", request.idempotency_key, request)
+        if existing is not None:
+            return existing
+
         def op() -> CreateRunResponse:
-            client = service.create_lora_training_client(
-                adapter_id=request.adapter_id,
-                checkpoint_path=request.checkpoint_path,
-            )
-            run_id = f"run_{uuid.uuid4().hex[:12]}"
-            runs[run_id] = client
-            now = _utc_now()
-            record = RunRecord(
-                run_id=run_id,
-                adapter_id=client.adapter_id,
-                name=request.name,
-                status="ready" if request.checkpoint_path else "created",
-                optimizer_steps=_client_step(client),
-                last_checkpoint_path=request.checkpoint_path,
-                restored_from=request.checkpoint_path,
-                created_at=now,
-                updated_at=now,
-            )
-            with records_lock:
-                records[run_id] = record
-                run_store.save(records)
-            return CreateRunResponse(
-                run_id=run_id,
-                adapter_id=client.adapter_id,
-                name=request.name,
-                status=record.status,
-                sequence=record.sequence,
-            )
+            try:
+                client = service.create_lora_training_client(
+                    adapter_id=request.adapter_id,
+                    checkpoint_path=request.checkpoint_path,
+                )
+                run_id = f"run_{uuid.uuid4().hex[:12]}"
+                runs[run_id] = client
+                now = _utc_now()
+                record = RunRecord(
+                    run_id=run_id,
+                    adapter_id=client.adapter_id,
+                    name=request.name,
+                    status="ready" if request.checkpoint_path else "created",
+                    optimizer_steps=_client_step(client),
+                    last_checkpoint_path=request.checkpoint_path,
+                    restored_from=request.checkpoint_path,
+                    created_at=now,
+                    updated_at=now,
+                )
+                with records_lock:
+                    records[run_id] = record
+                    run_store.save(records)
+                response = CreateRunResponse(
+                    run_id=run_id,
+                    adapter_id=client.adapter_id,
+                    name=request.name,
+                    status=record.status,
+                    sequence=record.sequence,
+                )
+                store_idempotent_response("create_run", request.idempotency_key, request, response)
+                return response
+            except Exception as exc:
+                store_idempotent_error("create_run", request.idempotency_key, request, exc)
+                raise
 
         return executor.submit(op).result()
 
@@ -594,6 +706,9 @@ def create_app(
 
     @app.post("/train_steps")
     def train_steps(request: TrainStepsRequest) -> TrainStepsResponse | JobSubmitResponse:
+        existing = get_idempotent_response("train_steps", request.idempotency_key, request)
+        if existing is not None:
+            return existing
         job = create_job("train_steps", list(request.batches))
         if request.run_async:
             future = executor.submit(lambda: run_train_steps(request, job))
@@ -605,8 +720,16 @@ def create_app(
                     pass
 
             future.add_done_callback(complete_job)
-            return JobSubmitResponse(job=job)
-        return executor.submit(lambda: run_train_steps(request, job)).result()
+            response = JobSubmitResponse(job=job)
+            store_idempotent_response("train_steps", request.idempotency_key, request, response)
+            return response
+        try:
+            response = executor.submit(lambda: run_train_steps(request, job)).result()
+            store_idempotent_response("train_steps", request.idempotency_key, request, response)
+            return response
+        except Exception as exc:
+            store_idempotent_error("train_steps", request.idempotency_key, request, exc)
+            raise
 
     @app.post("/runs/{run_id}/forward_backward")
     def forward_backward(run_id: str, request: ForwardBackwardRequest) -> ForwardBackwardResponse:
@@ -663,6 +786,10 @@ def create_app(
 
     @app.post("/runs/{run_id}/optim_step")
     def optim_step(run_id: str, request: OptimStepRequest) -> OptimStepResponseModel:
+        existing = get_idempotent_response(f"optim_step:{run_id}", request.idempotency_key, request)
+        if existing is not None:
+            return existing
+
         def op() -> OptimStepResponseModel:
             client = get_run(run_id)
             try:
@@ -671,8 +798,11 @@ def create_app(
                 record = mark_run(run_id, status="ready")
                 record.optimizer_steps = output.step
                 run_store.save(records)
-                return OptimStepResponseModel(run=record, output=asdict(output))
+                response = OptimStepResponseModel(run=record, output=asdict(output))
+                store_idempotent_response(f"optim_step:{run_id}", request.idempotency_key, request, response)
+                return response
             except Exception as exc:
+                store_idempotent_error(f"optim_step:{run_id}", request.idempotency_key, request, exc)
                 mark_run_failed(run_id, exc)
                 raise
 
@@ -680,6 +810,10 @@ def create_app(
 
     @app.post("/runs/{run_id}/save")
     def save(run_id: str, request: SaveRequest) -> SaveResponse:
+        existing = get_idempotent_response(f"save:{run_id}", request.idempotency_key, request)
+        if existing is not None:
+            return existing
+
         def op() -> SaveResponse:
             client = get_run(run_id)
             try:
@@ -688,8 +822,11 @@ def create_app(
                 record = mark_run(run_id, status="ready")
                 record.last_checkpoint_path = output.path
                 run_store.save(records)
-                return SaveResponse(run=record, output=asdict(output))
+                response = SaveResponse(run=record, output=asdict(output))
+                store_idempotent_response(f"save:{run_id}", request.idempotency_key, request, response)
+                return response
             except Exception as exc:
+                store_idempotent_error(f"save:{run_id}", request.idempotency_key, request, exc)
                 mark_run_failed(run_id, exc)
                 raise
 

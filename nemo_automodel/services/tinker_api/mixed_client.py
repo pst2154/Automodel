@@ -265,21 +265,54 @@ class MixedLoraServiceClient:
         state_path = checkpoint_dir / "adapter_model.pt"
         if not state_path.exists():
             raise FileNotFoundError(f"Missing adapter checkpoint: {state_path}")
-        state = torch.load(state_path, map_location=self.device)
-        for name, layer in self.mixed_lora_layers.items():
-            layer.load_adapter_state_dict(adapter_id, name, state)
 
         handle = self.adapters[adapter_id]
         config_path = checkpoint_dir / "adapter_config.json"
         if config_path.exists():
             with config_path.open("r", encoding="utf-8") as fp:
                 config = json.load(fp)
+            self._validate_checkpoint_config(config, checkpoint_dir)
             handle.step = int(config.get("step", 0))
+
+        state = torch.load(state_path, map_location=self.device)
+        expected_keys = set()
+        for name in self.mixed_lora_layers:
+            expected_keys.add(f"{name}.lora_a")
+            expected_keys.add(f"{name}.lora_b")
+        missing_keys = sorted(expected_keys - set(state))
+        if missing_keys:
+            raise ValueError(f"Checkpoint {checkpoint_dir} is missing adapter tensors: {missing_keys[:5]}")
+        for name, layer in self.mixed_lora_layers.items():
+            layer.load_adapter_state_dict(adapter_id, name, state)
 
         optimizer_path = checkpoint_dir / "optimizer.pt"
         if optimizer_path.exists():
             handle.optimizer = torch.optim.AdamW(self.adapter_parameters(adapter_id))
             handle.optimizer.load_state_dict(torch.load(optimizer_path, map_location=self.device))
+
+    def _validate_checkpoint_config(self, config: dict[str, object], checkpoint_dir: pathlib.Path) -> None:
+        """Validate that a checkpoint matches this resident base model and LoRA layout."""
+        if config.get("base_model") != self.base_model:
+            raise ValueError(
+                f"Checkpoint {checkpoint_dir} was saved for base_model={config.get('base_model')!r}, "
+                f"but this service is running base_model={self.base_model!r}"
+            )
+        if int(config.get("rank", -1)) != self.lora_config.rank:
+            raise ValueError(
+                f"Checkpoint {checkpoint_dir} was saved with rank={config.get('rank')}, "
+                f"but this service is running rank={self.lora_config.rank}"
+            )
+        if config.get("alpha") != self.lora_config.alpha:
+            raise ValueError(
+                f"Checkpoint {checkpoint_dir} was saved with alpha={config.get('alpha')}, "
+                f"but this service is running alpha={self.lora_config.alpha}"
+            )
+        expected_targets = self.lora_config.target_modules or ["*_proj"]
+        if config.get("target_modules") != expected_targets:
+            raise ValueError(
+                f"Checkpoint {checkpoint_dir} target_modules={config.get('target_modules')!r} "
+                f"do not match this service target_modules={expected_targets!r}"
+            )
 
     def forward_backward_mixed(
         self,

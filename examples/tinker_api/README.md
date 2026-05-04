@@ -206,6 +206,12 @@ training step. Metadata is persisted to
 are listed as `detached` until a new resident adapter is created from a
 checkpoint.
 
+Mutating endpoints that can safely be retried accept an optional
+`idempotency_key`: `POST /runs`, `POST /train_steps`,
+`POST /runs/{run_id}/optim_step`, and `POST /runs/{run_id}/save`. Reusing the
+same key with the same payload returns the original response; reusing it with a
+different payload fails with `409`.
+
 Start the server:
 
 ```bash
@@ -282,18 +288,23 @@ python examples/tinker_api/api_smoke_client.py \
   --verify-samples
 ```
 
-This API layer is not production hardened. It has no auth, no SQL database, no
-idempotency keys, and no multi-process worker management yet. Its purpose is to
-freeze the basic Tinker-like HTTP contract around the mixed training worker
-while keeping the implementation pure Python.
+Restore validates the checkpoint before loading weights. The saved
+`adapter_config.json` must match the running service's base model, LoRA rank,
+alpha, and target modules, and the adapter tensor keys must match the resident
+mixed-LoRA layout.
+
+This API layer is not production hardened. It has no auth, no SQL database, and
+no multi-process worker management yet. Its purpose is to freeze the basic
+Tinker-like HTTP contract around the mixed training worker while keeping the
+implementation pure Python.
 
 ## Next Steps
 
 1. Replace the JSON metadata files with SQLite or Postgres and add stronger
    restart recovery.
-2. Add idempotency keys so clients can safely retry create/train/save requests.
+2. Add auth and tenant quotas for shared-GPU use.
 3. Add built-in RL losses that match Tinker-style `importance_sampling`, `ppo`,
    `cispo`, and `dro` inputs.
 4. Replace serialized adapter swapping with multi-adapter batching or fused LoRA
    kernels inspired by mLoRA.
-5. Add auth, tenant quotas, and multi-process worker management.
+5. Add multi-process worker management.
