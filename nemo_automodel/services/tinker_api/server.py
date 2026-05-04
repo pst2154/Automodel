@@ -349,6 +349,7 @@ def create_app(
     trust_remote_code: bool = False,
     api_key: Optional[str] = None,
     max_resident_adapters: Optional[int] = None,
+    use_triton_lora: bool = False,
 ) -> FastAPI:
     """Create a single-process mixed-LoRA FastAPI app."""
     if not HAS_FASTAPI or not HAS_PYDANTIC:
@@ -362,6 +363,7 @@ def create_app(
         torch_dtype=torch_dtype,
         trust_remote_code=trust_remote_code,
         lora_config=LoraConfig(rank=rank, alpha=alpha),
+        use_triton_lora=use_triton_lora,
     )
     run_store = JsonStore(pathlib.Path(scratch_dir) / "tinker_api" / "runs.json", "runs", RunRecord)
     job_store = JsonStore(pathlib.Path(scratch_dir) / "tinker_api" / "jobs.json", "jobs", JobRecord)
@@ -433,6 +435,7 @@ def create_app(
             "idempotency_store": str(idempotency_store.path),
             "auth_enabled": expected_api_key is not None,
             "max_resident_adapters": max_resident_adapters,
+            "use_triton_lora": use_triton_lora,
         }
 
     def get_record(run_id: str) -> RunRecord:

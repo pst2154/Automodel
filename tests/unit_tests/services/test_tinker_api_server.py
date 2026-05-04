@@ -74,8 +74,11 @@ class FakeMixedLoraServiceClient:
 
 def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
-    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, use_triton_lora=True)
     client = fastapi_testclient.TestClient(app)
+
+    health = client.get("/health").json()
+    assert health["use_triton_lora"] is True
 
     first = client.post("/runs", json={"name": "atlas"}).json()
     second = client.post("/runs", json={"name": "borealis"}).json()

@@ -33,6 +33,11 @@ def main() -> None:
     parser.add_argument("--torch-dtype", default="bfloat16")
     parser.add_argument("--api-key", default=os.environ.get("TINKER_API_KEY"))
     parser.add_argument("--max-resident-adapters", type=int, default=None)
+    parser.add_argument(
+        "--use-triton-lora",
+        action="store_true",
+        help="Use AutoModel's existing single-adapter Triton LoRA kernel for each active adapter range.",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18080)
     args = parser.parse_args()
@@ -47,6 +52,7 @@ def main() -> None:
         torch_dtype=args.torch_dtype,
         api_key=args.api_key,
         max_resident_adapters=args.max_resident_adapters,
+        use_triton_lora=args.use_triton_lora,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 

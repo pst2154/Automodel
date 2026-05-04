@@ -37,6 +37,13 @@ from nemo_automodel.services.tinker_api.types import (
     SamplingParams,
     SaveStateResponse,
 )
+from nemo_automodel.shared.import_utils import safe_import_from
+
+HAS_LORA_TRITON_FUNCTION, LoRATritonFunction = safe_import_from(
+    "nemo_automodel.components._peft.lora",
+    "LoRATritonFunction",
+)
+_, HAVE_TRITON = safe_import_from("nemo_automodel.components._peft.lora_kernel", "HAVE_TRITON", alt=False)
 
 
 def _wildcard_to_regex(pattern: str) -> re.Pattern:
@@ -73,6 +80,7 @@ class MixedAdapterLinearLoRA(nn.Module):
         alpha: int,
         dropout: float,
         lora_dtype: torch.dtype,
+        use_triton_lora: bool = False,
     ):
         super().__init__()
         self.base_linear = base_linear
@@ -81,6 +89,7 @@ class MixedAdapterLinearLoRA(nn.Module):
         self.scale = alpha / rank
         self.dropout = dropout
         self.lora_dtype = lora_dtype
+        self.use_triton_lora = use_triton_lora
         self.lora_a = nn.ParameterDict()
         self.lora_b = nn.ParameterDict()
         self.active_ranges: list[tuple[str, int, int]] = []
@@ -132,6 +141,26 @@ class MixedAdapterLinearLoRA(nn.Module):
         self.lora_a[adapter_id].data.copy_(state[f"{prefix}.lora_a"].to(self.lora_a[adapter_id].device))
         self.lora_b[adapter_id].data.copy_(state[f"{prefix}.lora_b"].to(self.lora_b[adapter_id].device))
 
+    def _can_use_triton_lora(self, x: torch.Tensor) -> bool:
+        """Return whether the existing single-adapter Triton LoRA kernel can handle this slice."""
+        return bool(
+            self.use_triton_lora and HAS_LORA_TRITON_FUNCTION and HAVE_TRITON and x.is_cuda and x.dim() in {2, 3}
+        )
+
+    def _adapter_delta(self, adapter_id: str, x: torch.Tensor, result_dtype: torch.dtype) -> torch.Tensor:
+        """Compute one adapter's LoRA delta with the selected backend."""
+        x_lora = x.to(self.lora_dtype)
+        if self._can_use_triton_lora(x_lora):
+            return LoRATritonFunction.apply(
+                x_lora,
+                self.lora_a[adapter_id],
+                self.lora_b[adapter_id],
+                self.scale,
+                result_dtype,
+            )
+        lora_out = F.linear(x_lora, self.lora_a[adapter_id])
+        return F.linear(lora_out, self.lora_b[adapter_id]) * self.scale
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply the base linear layer and the selected LoRA adapters."""
         result = self.base_linear(x)
@@ -144,8 +173,7 @@ class MixedAdapterLinearLoRA(nn.Module):
             x_slice = x[start_idx:end_idx]
             if self.training and self.dropout > 0:
                 x_slice = F.dropout(x_slice, p=self.dropout, training=True)
-            lora_out = F.linear(x_slice.to(self.lora_dtype), self.lora_a[adapter_id])
-            lora_out = F.linear(lora_out, self.lora_b[adapter_id]) * self.scale
+            lora_out = self._adapter_delta(adapter_id, x_slice, result.dtype)
             result[start_idx:end_idx] = result[start_idx:end_idx] + lora_out.to(result.dtype)
         return result
 
@@ -172,6 +200,7 @@ class MixedLoraServiceClient:
         torch_dtype: str | torch.dtype = "bfloat16",
         trust_remote_code: bool = False,
         lora_config: Optional[LoraConfig] = None,
+        use_triton_lora: bool = False,
     ):
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -179,6 +208,7 @@ class MixedLoraServiceClient:
         self.scratch_dir = pathlib.Path(scratch_dir)
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self.lora_config = lora_config or LoraConfig(rank=16)
+        self.use_triton_lora = use_triton_lora
         self.adapters: dict[str, MixedAdapterHandle] = {}
 
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -219,6 +249,7 @@ class MixedLoraServiceClient:
                 alpha=alpha,
                 dropout=self.lora_config.dropout,
                 lora_dtype=lora_dtype,
+                use_triton_lora=self.use_triton_lora,
             )
             setattr(parent, child_name, mixed_layer)
             layers[name] = mixed_layer

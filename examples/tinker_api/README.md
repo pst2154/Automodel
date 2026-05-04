@@ -221,6 +221,7 @@ python examples/tinker_api/run_mixed_lora_server.py \
   --base-model Qwen/Qwen3-0.6B \
   --scratch-dir /home/scratch.asteiner \
   --cache-dir /home/scratch.asteiner/hf \
+  --use-triton-lora \
   --max-resident-adapters 8
 ```
 
@@ -315,6 +316,40 @@ no SQL database, and no multi-process worker management yet. Its purpose is to
 freeze the basic Tinker-like HTTP contract around the mixed training worker
 while keeping the implementation pure Python.
 
+### Kernel Path
+
+The prototype can optionally route each active adapter range through
+AutoModel's existing PEFT `LoRATritonFunction`:
+
+```bash
+python examples/tinker_api/run_mixed_lora_server.py \
+  --base-model Qwen/Qwen3-0.6B \
+  --scratch-dir /home/scratch.asteiner \
+  --cache-dir /home/scratch.asteiner/hf \
+  --rank 16 \
+  --use-triton-lora
+```
+
+That compiled path covers the LoRA delta for one adapter range at a time and
+includes backward. It is a useful bridge, but it is not the final production
+kernel shape: the current mixed worker still loops over active ranges inside
+each patched linear layer.
+
+The production kernels that remain are:
+
+1. A grouped mixed-adapter LoRA forward kernel that consumes flattened token
+   rows plus an adapter-id vector and computes `x @ A_i.T @ B_i.T` without one
+   launch per adapter range.
+2. Matching grouped backward kernels for `dX`, `dA_i`, and `dB_i` with
+   segmented reductions by adapter.
+3. Optional fused optimizer updates for many small adapter tensors, once the
+   training service has enough resident-adapter churn to make Python optimizer
+   overhead visible.
+
+No attention, RoPE, base-model GEMM, or normalization kernels need to change
+for the single-node prototype. The kernel work is specifically in the LoRA
+delta path and, later, the small-adapter optimizer path.
+
 ## Next Steps
 
 1. Replace the JSON metadata files with SQLite or Postgres and add stronger
@@ -322,6 +357,6 @@ while keeping the implementation pure Python.
 2. Add per-tenant quotas and rate limits for shared-GPU use.
 3. Add built-in RL losses that match Tinker-style `importance_sampling`, `ppo`,
    `cispo`, and `dro` inputs.
-4. Replace serialized adapter swapping with multi-adapter batching or fused LoRA
-   kernels inspired by mLoRA.
+4. Replace per-range LoRA launches with grouped mixed-adapter LoRA kernels
+   inspired by mLoRA.
 5. Add multi-process worker management.
