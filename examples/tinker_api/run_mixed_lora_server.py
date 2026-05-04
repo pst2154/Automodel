@@ -62,6 +62,12 @@ def main() -> None:
         action="store_true",
         help="Compatibility alias for --mixed-lora-backend=triton.",
     )
+    parser.add_argument(
+        "--worker-processes",
+        type=int,
+        default=0,
+        help="Start this many supervised local worker processes for future multi-process routing.",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18080)
     args = parser.parse_args()
@@ -83,6 +89,7 @@ def main() -> None:
         metadata_backend=args.metadata_backend,
         restore_runs_on_startup=args.restore_runs_on_startup,
         resume_interrupted_jobs_on_startup=args.resume_interrupted_jobs_on_startup,
+        worker_processes=args.worker_processes,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 

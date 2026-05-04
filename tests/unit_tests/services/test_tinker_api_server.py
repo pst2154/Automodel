@@ -119,6 +119,20 @@ def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch, tmp_path):
     assert record["last_checkpoint_path"] == "/tmp/atlas-test"
 
 
+def test_mixed_lora_server_reports_supervised_worker_processes(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, worker_processes=2)
+    with fastapi_testclient.TestClient(app) as client:
+        health = client.get("/health").json()
+        workers = client.get("/workers").json()
+
+        assert health["worker_processes"] == 2
+        assert len(health["workers"]) == 2
+        assert len(workers) == 2
+        assert {worker["status"] for worker in workers} == {"running"}
+        assert all(worker["pid"] for worker in workers)
+
+
 def test_mixed_lora_server_restores_run_metadata(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
     app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)

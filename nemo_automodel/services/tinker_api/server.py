@@ -24,6 +24,7 @@ import time
 import uuid
 from collections import deque
 from concurrent.futures import Future
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -35,6 +36,7 @@ from nemo_automodel.services.tinker_api.mixed_client import (
     MixedLoraTrainingClient,
 )
 from nemo_automodel.services.tinker_api.types import AdamParams, Datum, LoraConfig, ModelInput, SamplingParams
+from nemo_automodel.services.tinker_api.worker_manager import ProcessWorkerManager, WorkerProcessRecord
 from nemo_automodel.shared.import_utils import safe_import_from
 
 HAS_FASTAPI, FastAPI = safe_import_from("fastapi", "FastAPI")
@@ -435,6 +437,7 @@ def create_app(
     metadata_backend: MetadataBackend = "sqlite",
     restore_runs_on_startup: bool = False,
     resume_interrupted_jobs_on_startup: bool = False,
+    worker_processes: int = 0,
 ) -> FastAPI:
     """Create a single-process mixed-LoRA FastAPI app."""
     if not HAS_FASTAPI or not HAS_PYDANTIC:
@@ -445,6 +448,8 @@ def create_app(
         raise ValueError("max_runs_per_tenant must be positive")
     if tenant_rate_limit_per_minute is not None and tenant_rate_limit_per_minute <= 0:
         raise ValueError("tenant_rate_limit_per_minute must be positive")
+    if worker_processes < 0:
+        raise ValueError("worker_processes must be non-negative")
 
     service = MixedLoraServiceClient(
         base_model=base_model,
@@ -524,8 +529,17 @@ def create_app(
     rate_limit_lock = threading.RLock()
     tenant_request_times: dict[str, deque[float]] = {}
     executor = QueuedExecutor()
+    worker_manager = ProcessWorkerManager(num_workers=worker_processes) if worker_processes else None
+    if worker_manager is not None:
+        worker_manager.start()
 
-    app = FastAPI(title="NeMo AutoModel Tinker API Prototype", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+        if worker_manager is not None:
+            worker_manager.stop()
+
+    app = FastAPI(title="NeMo AutoModel Tinker API Prototype", version="0.1.0", lifespan=lifespan)
     expected_api_key = api_key or os.environ.get("TINKER_API_KEY")
 
     if expected_api_key:
@@ -568,7 +582,24 @@ def create_app(
             "metadata_backend": metadata_backend,
             "restore_runs_on_startup": restore_runs_on_startup,
             "resume_interrupted_jobs_on_startup": resume_interrupted_jobs_on_startup,
+            "worker_processes": worker_processes,
+            "workers": [
+                _model_to_dict(record) if isinstance(record, BaseModel) else asdict(record)
+                for record in (worker_manager.snapshot() if worker_manager is not None else [])
+            ],
         }
+
+    @app.get("/workers", response_model=list[WorkerProcessRecord])
+    def list_workers() -> list[WorkerProcessRecord]:
+        if worker_manager is None:
+            return []
+        return worker_manager.snapshot()
+
+    @app.post("/workers/restart_dead", response_model=list[WorkerProcessRecord])
+    def restart_dead_workers() -> list[WorkerProcessRecord]:
+        if worker_manager is None:
+            return []
+        return worker_manager.restart_dead()
 
     def tenant_key(tenant_id: Optional[str]) -> str:
         return tenant_id or "_default"

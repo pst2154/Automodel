@@ -14,8 +14,9 @@
 
 # Tinker-like AutoModel Prototype
 
-This prototype is an in-process Python API that mirrors the smallest useful
-part of Tinker's public training loop while staying inside NeMo AutoModel:
+This prototype has two layers. The original in-process `ServiceClient` mirrors
+the smallest useful part of Tinker's public training loop while staying inside
+NeMo AutoModel:
 
 1. Create a `ServiceClient`.
 2. Create a LoRA `TrainingClient`.
@@ -23,28 +24,38 @@ part of Tinker's public training loop while staying inside NeMo AutoModel:
 4. Call `optim_step(AdamParams(...))`.
 5. Save adapter state and sample from the in-memory model.
 
-The current version also supports multiple virtual LoRA adapters over one
-resident base model when clients are created from the same `ServiceClient` with
-the same base-model and LoRA configuration. Adapter calls are serialized and
-swap adapter weights through the shared model; this proves the Tinker-like
-control-plane semantics before adding mLoRA-style multi-adapter batching.
+The newer mixed-LoRA HTTP service keeps multiple LoRA adapters resident over
+one base model, batches different adapters together, supports RL-style losses,
+and exposes durable run/job metadata. Use the HTTP service for the
+Tinker-like/mLoRA experiments; the original `ServiceClient` is now mostly a
+small compatibility smoke-test path.
 
 ## What Works
 
-- One resident base model per `ServiceClient` worker key.
-- Multiple virtual LoRA adapters over that shared base model.
+- One resident base model per `ServiceClient` worker key in the legacy path.
+- Multiple resident LoRA adapters over one shared base model in the mixed
+  service path.
 - Separate adapter IDs, adapter weights, optimizer state, and checkpoint output.
 - Tinker-style synchronous futures via `.result()`.
 - Cross-entropy SFT data using `Datum`, `ModelInput`, `target_tokens`, and `weights`.
+- Mixed-service RL losses: `importance_sampling`, `ppo`, `cispo`, and `dro`.
+- Mixed-adapter backends: `loop`, `grouped`, `triton`, and `grouped_triton`.
+- SQLite-backed run/job/idempotency metadata plus interrupted-job continuation.
+- Optional local worker-process supervision via `--worker-processes`.
 - Tiny GPU smoke tests in the `nvcr.io/nvidia/nemo-automodel:26.04` container.
 
 ## Current Limits
 
-- Adapter execution is serialized with a lock.
-- Adapter weights are swapped through one patched model rather than batched together.
-- Only `cross_entropy` is implemented.
-- The core training worker is still in-process; the HTTP layer is a thin
-  FastAPI wrapper without durable orchestration.
+- The legacy `ServiceClient` path still serializes adapter execution with a
+  lock, swaps adapter weights through one patched model, and only implements
+  `cross_entropy`.
+- The mixed service has batched adapter execution, RL losses, and durable
+  metadata, but GPU work is still owned by a single in-process
+  `MixedLoraServiceClient`.
+- `--worker-processes` supervises local worker processes and exposes health
+  endpoints, but request routing into those workers is not implemented yet.
+- Live Tinker parity is opt-in because it requires Tinker credentials and can
+  consume hosted training quota.
 - `--force-hf` is useful for arbitrary Hugging Face smoke-test models; AutoModel-native
   loading should be used for supported production targets.
 
@@ -405,6 +416,30 @@ weight. `loss_fn_config` supports `clip_low_threshold` and
 `clip_high_threshold` for `ppo`/`cispo`, and `beta` for `dro`. Losses are
 summed over tokens to match Tinker diagnostics.
 
+### Live Tinker Parity
+
+The repository includes an opt-in live parity harness at
+`tests/integration_tests/services/test_tinker_live_parity.py`. It is skipped by
+default because it needs Tinker credentials and runs against hosted
+infrastructure.
+
+Create or refresh a golden response:
+
+```bash
+RUN_TINKER_LIVE_PARITY=1 \
+TINKER_API_KEY=... \
+TINKER_UPDATE_GOLDEN=1 \
+python -m pytest tests/integration_tests/services/test_tinker_live_parity.py
+```
+
+Compare future responses to the saved golden:
+
+```bash
+RUN_TINKER_LIVE_PARITY=1 \
+TINKER_API_KEY=... \
+python -m pytest tests/integration_tests/services/test_tinker_live_parity.py
+```
+
 The production kernel work that remains is:
 
 1. Benchmarks comparing `loop`, `grouped`, `triton`, and `grouped_triton` on
@@ -421,6 +456,8 @@ delta path and, later, the small-adapter optimizer path.
 
 ## Next Steps
 
-1. Add golden-value parity tests against the live Tinker service.
+1. Route HTTP requests into supervised worker processes instead of the
+   in-process mixed-LoRA worker.
 2. Benchmark and tune `grouped_triton` against the existing LoRA backends.
-3. Add multi-process worker management.
+3. Run the opt-in live Tinker parity test whenever credentials/quota are
+   available and check in reviewed golden values.
