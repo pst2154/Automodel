@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from nemo_automodel.services.tinker_api.mixed_client import MixedLoraServiceClient, MixedLoraTrainingClient
@@ -62,6 +63,8 @@ class CreateRunResponse(BaseModel):
     run_id: str
     adapter_id: str
     name: Optional[str] = None
+    status: str
+    sequence: int
 
 
 class ForwardBackwardRequest(BaseModel):
@@ -109,6 +112,44 @@ class RunRecord(BaseModel):
     run_id: str
     adapter_id: str
     name: Optional[str] = None
+    status: str = "created"
+    sequence: int = 0
+    optimizer_steps: int = 0
+    forward_backward_calls: int = 0
+    last_loss: Optional[float] = None
+    last_metrics: dict[str, float] = Field(default_factory=dict)
+    last_checkpoint_path: Optional[str] = None
+    last_error: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class ForwardBackwardResponse(BaseModel):
+    """Forward/backward response with run metadata."""
+
+    run: RunRecord
+    output: dict[str, Any]
+
+
+class OptimStepResponseModel(BaseModel):
+    """Optimizer step response with run metadata."""
+
+    run: RunRecord
+    output: dict[str, Any]
+
+
+class SaveResponse(BaseModel):
+    """Save response with run metadata."""
+
+    run: RunRecord
+    output: dict[str, Any]
+
+
+class SampleResponseModel(BaseModel):
+    """Sample response with run metadata."""
+
+    run: RunRecord
+    output: dict[str, Any]
 
 
 def _datum_from_request(request: DatumRequest) -> Datum:
@@ -138,6 +179,10 @@ def _sampling_from_request(request: SampleRequest) -> SamplingParams:
         top_p=request.top_p,
         do_sample=request.do_sample,
     )
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def create_app(
@@ -184,52 +229,128 @@ def create_app(
             "mode": "mixed_lora_single_process",
         }
 
+    def get_record(run_id: str) -> RunRecord:
+        record = records.get(run_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
+        return record
+
+    def mark_run(run_id: str, *, status: str, error: Optional[str] = None) -> RunRecord:
+        record = get_record(run_id)
+        record.status = status
+        record.last_error = error
+        record.sequence += 1
+        record.updated_at = _utc_now()
+        return record
+
+    def mark_run_failed(run_id: str, exc: Exception) -> None:
+        mark_run(run_id, status="failed", error=f"{type(exc).__name__}: {exc}")
+
     @app.post("/runs", response_model=CreateRunResponse)
     def create_run(request: CreateRunRequest) -> CreateRunResponse:
         client = service.create_lora_training_client()
         run_id = f"run_{uuid.uuid4().hex[:12]}"
         runs[run_id] = client
-        records[run_id] = RunRecord(run_id=run_id, adapter_id=client.adapter_id, name=request.name)
-        return CreateRunResponse(run_id=run_id, adapter_id=client.adapter_id, name=request.name)
+        now = _utc_now()
+        records[run_id] = RunRecord(
+            run_id=run_id, adapter_id=client.adapter_id, name=request.name, created_at=now, updated_at=now
+        )
+        return CreateRunResponse(
+            run_id=run_id,
+            adapter_id=client.adapter_id,
+            name=request.name,
+            status=records[run_id].status,
+            sequence=records[run_id].sequence,
+        )
 
     @app.get("/runs", response_model=list[RunRecord])
     def list_runs() -> list[RunRecord]:
         return list(records.values())
 
+    @app.get("/runs/{run_id}", response_model=RunRecord)
+    def get_run_record(run_id: str) -> RunRecord:
+        return get_record(run_id)
+
     @app.post("/runs/{run_id}/forward_backward")
-    def forward_backward(run_id: str, request: ForwardBackwardRequest) -> dict[str, Any]:
+    def forward_backward(run_id: str, request: ForwardBackwardRequest) -> ForwardBackwardResponse:
         client = get_run(run_id)
-        data = [_datum_from_request(datum) for datum in request.data]
-        output = service.forward_backward_mixed({client.adapter_id: data}, request.loss_fn).result()[client.adapter_id]
-        return asdict(output)
+        try:
+            mark_run(run_id, status="running")
+            data = [_datum_from_request(datum) for datum in request.data]
+            output = service.forward_backward_mixed({client.adapter_id: data}, request.loss_fn).result()[
+                client.adapter_id
+            ]
+            record = mark_run(run_id, status="ready")
+            record.forward_backward_calls += 1
+            record.last_loss = output.loss
+            record.last_metrics = dict(output.metrics)
+            return ForwardBackwardResponse(run=record, output=asdict(output))
+        except Exception as exc:
+            mark_run_failed(run_id, exc)
+            raise
 
     @app.post("/mixed_forward_backward")
-    def mixed_forward_backward(request: MixedForwardBackwardRequest) -> dict[str, Any]:
+    def mixed_forward_backward(request: MixedForwardBackwardRequest) -> dict[str, ForwardBackwardResponse]:
         batches_by_adapter = {}
         run_to_adapter = {}
-        for run_id, batch in request.batches.items():
-            client = get_run(run_id)
-            batches_by_adapter[client.adapter_id] = [_datum_from_request(datum) for datum in batch]
-            run_to_adapter[run_id] = client.adapter_id
-        outputs = service.forward_backward_mixed(batches_by_adapter, request.loss_fn).result()
-        return {run_id: asdict(outputs[adapter_id]) for run_id, adapter_id in run_to_adapter.items()}
+        active_run_ids = list(request.batches)
+        try:
+            for run_id, batch in request.batches.items():
+                mark_run(run_id, status="running")
+                client = get_run(run_id)
+                batches_by_adapter[client.adapter_id] = [_datum_from_request(datum) for datum in batch]
+                run_to_adapter[run_id] = client.adapter_id
+            outputs = service.forward_backward_mixed(batches_by_adapter, request.loss_fn).result()
+            responses = {}
+            for run_id, adapter_id in run_to_adapter.items():
+                output = outputs[adapter_id]
+                record = mark_run(run_id, status="ready")
+                record.forward_backward_calls += 1
+                record.last_loss = output.loss
+                record.last_metrics = dict(output.metrics)
+                responses[run_id] = ForwardBackwardResponse(run=record, output=asdict(output))
+            return responses
+        except Exception as exc:
+            for run_id in active_run_ids:
+                if run_id in records:
+                    mark_run_failed(run_id, exc)
+            raise
 
     @app.post("/runs/{run_id}/optim_step")
-    def optim_step(run_id: str, request: OptimStepRequest) -> dict[str, Any]:
+    def optim_step(run_id: str, request: OptimStepRequest) -> OptimStepResponseModel:
         client = get_run(run_id)
-        output = client.optim_step(_adam_from_request(request)).result()
-        return asdict(output)
+        try:
+            mark_run(run_id, status="optimizing")
+            output = client.optim_step(_adam_from_request(request)).result()
+            record = mark_run(run_id, status="ready")
+            record.optimizer_steps = output.step
+            return OptimStepResponseModel(run=record, output=asdict(output))
+        except Exception as exc:
+            mark_run_failed(run_id, exc)
+            raise
 
     @app.post("/runs/{run_id}/save")
-    def save(run_id: str, request: SaveRequest) -> dict[str, Any]:
+    def save(run_id: str, request: SaveRequest) -> SaveResponse:
         client = get_run(run_id)
-        output = client.save_state(request.name).result()
-        return asdict(output)
+        try:
+            mark_run(run_id, status="saving")
+            output = client.save_state(request.name).result()
+            record = mark_run(run_id, status="ready")
+            record.last_checkpoint_path = output.path
+            return SaveResponse(run=record, output=asdict(output))
+        except Exception as exc:
+            mark_run_failed(run_id, exc)
+            raise
 
     @app.post("/runs/{run_id}/sample")
-    def sample(run_id: str, request: SampleRequest) -> dict[str, Any]:
+    def sample(run_id: str, request: SampleRequest) -> SampleResponseModel:
         client = get_run(run_id)
-        output = service.sample(client.adapter_id, request.prompt, _sampling_from_request(request)).result()
-        return asdict(output)
+        try:
+            output = service.sample(client.adapter_id, request.prompt, _sampling_from_request(request)).result()
+            record = mark_run(run_id, status="ready")
+            return SampleResponseModel(run=record, output=asdict(output))
+        except Exception as exc:
+            mark_run_failed(run_id, exc)
+            raise
 
     return app

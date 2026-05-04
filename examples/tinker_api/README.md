@@ -181,12 +181,19 @@ but it exposes the first real service contract:
 GET  /health
 POST /runs
 GET  /runs
+GET  /runs/{run_id}
 POST /runs/{run_id}/forward_backward
 POST /mixed_forward_backward
 POST /runs/{run_id}/optim_step
 POST /runs/{run_id}/save
 POST /runs/{run_id}/sample
 ```
+
+Run records include `status`, `sequence`, `optimizer_steps`,
+`forward_backward_calls`, `last_loss`, `last_metrics`,
+`last_checkpoint_path`, `last_error`, `created_at`, and `updated_at`.
+State-changing endpoints return both the compact run record and the operation
+output, so clients do not need to make a second call after every training step.
 
 Start the server:
 
@@ -207,8 +214,28 @@ python examples/tinker_api/api_smoke_client.py \
   --base-url http://127.0.0.1:18080 \
   --base-model Qwen/Qwen3-0.6B \
   --cache-dir /home/scratch.asteiner/hf \
-  --steps 20
+  --steps 20 \
+  --batch-size 1
 ```
+
+For the stronger Qwen learn-and-sample check, run:
+
+```bash
+python examples/tinker_api/api_smoke_client.py \
+  --base-url http://127.0.0.1:18080 \
+  --base-model Qwen/Qwen3-0.6B \
+  --cache-dir /home/scratch.asteiner/hf \
+  --steps 160 \
+  --batch-size 2 \
+  --lr 1e-3 \
+  --max-new-tokens 12 \
+  --verify-samples
+```
+
+That client creates two runs, sends different Atlas and Borealis training
+examples through one `POST /mixed_forward_backward` call per step, steps each
+adapter independently, samples both adapters, verifies the expected route
+strings, and saves separate checkpoints.
 
 This API layer is not production hardened. It has no auth, no durable DB, no
 background queue, no cancellation, and no multi-process worker management yet.
