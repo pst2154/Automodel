@@ -201,10 +201,11 @@ Run records include `status`, `sequence`, `optimizer_steps`,
 `updated_at`. State-changing endpoints return both the compact run record and
 the operation output, so clients do not need to make a second call after every
 training step. Metadata is persisted to SQLite by default at
-`$SCRATCH/tinker_api/metadata.sqlite3`; after a server restart, previously
-known runs are listed as `detached` until a new resident adapter is created
-from a checkpoint. For debugging, the server can still use the old JSON files
-with `--metadata-backend json`.
+`$SCRATCH/tinker_api/metadata.sqlite3`. After a server restart, previously
+known runs are listed as `detached` by default; if they have a checkpoint path,
+`--restore-runs-on-startup` rehydrates them as resident adapters under the same
+run ids. For debugging, the server can still use the old JSON files with
+`--metadata-backend json`.
 
 Mutating endpoints that can safely be retried accept an optional
 `idempotency_key`: `POST /runs`, `POST /train_steps`,
@@ -224,7 +225,8 @@ python examples/tinker_api/run_mixed_lora_server.py \
   --mixed-lora-backend grouped \
   --max-resident-adapters 8 \
   --max-runs-per-tenant 2 \
-  --tenant-rate-limit-per-minute 120
+  --tenant-rate-limit-per-minute 120 \
+  --restore-runs-on-startup
 ```
 
 Clients then pass `--api-key dev-secret`. Runs and `POST /train_steps` can also
@@ -377,8 +379,7 @@ delta path and, later, the small-adapter optimizer path.
 
 ## Next Steps
 
-1. Add stronger restart recovery for resident adapter rehydration and active
-   job continuation.
+1. Add active job continuation after restart.
 2. Add built-in RL losses that match Tinker-style `importance_sampling`, `ppo`,
    `cispo`, and `dro` inputs.
 3. Replace per-range LoRA launches with grouped mixed-adapter LoRA kernels

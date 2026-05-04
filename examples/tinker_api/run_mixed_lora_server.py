@@ -36,6 +36,11 @@ def main() -> None:
     parser.add_argument("--max-runs-per-tenant", type=int, default=None)
     parser.add_argument("--tenant-rate-limit-per-minute", type=int, default=None)
     parser.add_argument(
+        "--restore-runs-on-startup",
+        action="store_true",
+        help="Rehydrate persisted runs that have a checkpoint path instead of marking them detached.",
+    )
+    parser.add_argument(
         "--metadata-backend",
         choices=("sqlite", "json"),
         default="sqlite",
@@ -71,6 +76,7 @@ def main() -> None:
         mixed_lora_backend=args.mixed_lora_backend,
         use_triton_lora=args.use_triton_lora,
         metadata_backend=args.metadata_backend,
+        restore_runs_on_startup=args.restore_runs_on_startup,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 

@@ -430,6 +430,7 @@ def create_app(
     mixed_lora_backend: MixedLoraBackend = "loop",
     use_triton_lora: bool = False,
     metadata_backend: MetadataBackend = "sqlite",
+    restore_runs_on_startup: bool = False,
 ) -> FastAPI:
     """Create a single-process mixed-LoRA FastAPI app."""
     if not HAS_FASTAPI or not HAS_PYDANTIC:
@@ -462,13 +463,29 @@ def create_app(
         record_type=IdempotencyRecord,
     )
     records: dict[str, RunRecord] = run_store.load()
-    for record in records.values():
-        if record.status not in {"failed", "detached"}:
-            record.status = "detached"
-            record.updated_at = _utc_now()
+    runs: dict[str, MixedLoraTrainingClient] = {}
+    for run_id, record in records.items():
+        if record.status in {"failed", "detached"}:
+            continue
+        checkpoint_path = record.last_checkpoint_path or record.restored_from
+        if restore_runs_on_startup and checkpoint_path:
+            try:
+                runs[run_id] = service.create_lora_training_client(
+                    adapter_id=record.adapter_id,
+                    checkpoint_path=checkpoint_path,
+                )
+                record.status = "ready"
+                record.optimizer_steps = _client_step(runs[run_id])
+                record.restored_from = checkpoint_path
+                record.last_error = None
+                record.updated_at = _utc_now()
+                continue
+            except Exception as exc:
+                record.last_error = f"Startup restore failed: {type(exc).__name__}: {exc}"
+        record.status = "detached"
+        record.updated_at = _utc_now()
     if records:
         run_store.save(records)
-    runs: dict[str, MixedLoraTrainingClient] = {}
     jobs: dict[str, JobRecord] = job_store.load()
     for job in jobs.values():
         if job.status in {"queued", "running", "canceling"}:
@@ -533,6 +550,7 @@ def create_app(
             "mixed_lora_backend": active_mixed_lora_backend,
             "use_triton_lora": use_triton_lora,
             "metadata_backend": metadata_backend,
+            "restore_runs_on_startup": restore_runs_on_startup,
         }
 
     def tenant_key(tenant_id: Optional[str]) -> str:

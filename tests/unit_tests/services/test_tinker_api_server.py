@@ -83,6 +83,7 @@ def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch, tmp_path):
     assert health["metadata_backend"] == "sqlite"
     assert health["max_runs_per_tenant"] is None
     assert health["tenant_rate_limit_per_minute"] is None
+    assert health["restore_runs_on_startup"] is False
 
     first = client.post("/runs", json={"name": "atlas"}).json()
     second = client.post("/runs", json={"name": "borealis"}).json()
@@ -144,6 +145,29 @@ def test_mixed_lora_server_marks_persisted_runs_detached(monkeypatch, tmp_path):
 
     record = restarted_client.get(f"/runs/{created['run_id']}").json()
     assert record["status"] == "detached"
+
+
+def test_mixed_lora_server_rehydrates_checkpointed_runs_on_startup(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    created = client.post(
+        "/runs",
+        json={"name": "restored", "adapter_id": "adapter_restored", "checkpoint_path": "/tmp/checkpoint"},
+    ).json()
+
+    restarted = server.create_app(base_model="fake-model", scratch_dir=tmp_path, restore_runs_on_startup=True)
+    restarted_client = fastapi_testclient.TestClient(restarted)
+
+    health = restarted_client.get("/health").json()
+    record = restarted_client.get(f"/runs/{created['run_id']}").json()
+    sample = restarted_client.post(f"/runs/{created['run_id']}/sample", json={"prompt": "hello"}).json()
+
+    assert health["restore_runs_on_startup"] is True
+    assert record["status"] == "ready"
+    assert record["optimizer_steps"] == 7
+    assert record["restored_from"] == "/tmp/checkpoint"
+    assert sample["output"]["text"] == "hello adapter_restored"
 
 
 def test_mixed_lora_server_can_use_json_metadata_backend(monkeypatch, tmp_path):
