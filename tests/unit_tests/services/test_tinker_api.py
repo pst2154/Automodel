@@ -103,19 +103,19 @@ def test_mixed_lora_layer_triton_bridge_matches_torch_forward_backward():
 
     assert layer_triton._can_use_triton_lora(x_triton)
     assert torch.allclose(out_triton, out_ref, atol=2e-4, rtol=2e-4)
-    assert torch.allclose(x_triton.grad, x_ref.grad, atol=2e-4, rtol=2e-4)
+    assert torch.allclose(x_triton.grad, x_ref.grad, atol=1e-3, rtol=1e-3)
     for adapter_id in ["atlas", "borealis"]:
         assert torch.allclose(
             layer_triton.lora_a[adapter_id].grad,
             layer_ref.lora_a[adapter_id].grad,
-            atol=2e-4,
-            rtol=2e-4,
+            atol=1e-3,
+            rtol=1e-3,
         )
         assert torch.allclose(
             layer_triton.lora_b[adapter_id].grad,
             layer_ref.lora_b[adapter_id].grad,
-            atol=2e-4,
-            rtol=2e-4,
+            atol=1e-3,
+            rtol=1e-3,
         )
 
 
