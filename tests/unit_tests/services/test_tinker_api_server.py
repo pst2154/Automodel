@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -84,6 +85,7 @@ def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch, tmp_path):
     assert health["max_runs_per_tenant"] is None
     assert health["tenant_rate_limit_per_minute"] is None
     assert health["restore_runs_on_startup"] is False
+    assert health["resume_interrupted_jobs_on_startup"] is False
 
     first = client.post("/runs", json={"name": "atlas"}).json()
     second = client.post("/runs", json={"name": "borealis"}).json()
@@ -231,6 +233,53 @@ def test_mixed_lora_server_submits_async_train_job(monkeypatch, tmp_path):
 
     job = client.get(f"/jobs/{submitted['job']['job_id']}").json()
     assert job["status"] in {"queued", "running", "succeeded"}
+
+
+def test_mixed_lora_server_resumes_interrupted_train_job_on_startup(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    created = client.post(
+        "/runs",
+        json={"name": "restored", "adapter_id": "adapter_resumed", "checkpoint_path": "/tmp/checkpoint"},
+    ).json()
+    request_payload = {
+        "batches": {created["run_id"]: [{"model_input": {"tokens": [1, 2, 3]}, "loss_fn_inputs": {}}]},
+        "steps": 3,
+        "learning_rate": 0.001,
+    }
+    now = server._utc_now()
+    job = server.JobRecord(
+        job_id="job_resume",
+        kind="train_steps",
+        status="running",
+        run_ids=[created["run_id"]],
+        progress={"step": 1, "total_steps": 3, "request": request_payload},
+        created_at=now,
+        updated_at=now,
+    )
+    store = server.SQLiteStore(tmp_path / "tinker_api" / "metadata.sqlite3", "jobs", server.JobRecord)
+    store.save({"job_resume": job})
+
+    restarted = server.create_app(
+        base_model="fake-model",
+        scratch_dir=tmp_path,
+        restore_runs_on_startup=True,
+        resume_interrupted_jobs_on_startup=True,
+    )
+    restarted_client = fastapi_testclient.TestClient(restarted)
+
+    resumed = restarted_client.get("/jobs/job_resume").json()
+    for _ in range(20):
+        if resumed["status"] == "succeeded":
+            break
+        time.sleep(0.05)
+        resumed = restarted_client.get("/jobs/job_resume").json()
+    run = restarted_client.get(f"/runs/{created['run_id']}").json()
+
+    assert resumed["status"] == "succeeded"
+    assert resumed["progress"]["step"] == 3
+    assert run["optimizer_steps"] == 9
 
 
 def test_mixed_lora_server_reuses_idempotent_create_response(monkeypatch, tmp_path):

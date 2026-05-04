@@ -431,6 +431,7 @@ def create_app(
     use_triton_lora: bool = False,
     metadata_backend: MetadataBackend = "sqlite",
     restore_runs_on_startup: bool = False,
+    resume_interrupted_jobs_on_startup: bool = False,
 ) -> FastAPI:
     """Create a single-process mixed-LoRA FastAPI app."""
     if not HAS_FASTAPI or not HAS_PYDANTIC:
@@ -489,6 +490,18 @@ def create_app(
     jobs: dict[str, JobRecord] = job_store.load()
     for job in jobs.values():
         if job.status in {"queued", "running", "canceling"}:
+            request_payload = job.progress.get("request") if isinstance(job.progress, dict) else None
+            can_resume = (
+                resume_interrupted_jobs_on_startup
+                and restore_runs_on_startup
+                and job.kind == "train_steps"
+                and request_payload is not None
+            )
+            if can_resume:
+                job.status = "queued"
+                job.error = None
+                job.updated_at = _utc_now()
+                continue
             job.status = "failed"
             job.error = "Job was interrupted by service restart"
             job.updated_at = _utc_now()
@@ -551,6 +564,7 @@ def create_app(
             "use_triton_lora": use_triton_lora,
             "metadata_backend": metadata_backend,
             "restore_runs_on_startup": restore_runs_on_startup,
+            "resume_interrupted_jobs_on_startup": resume_interrupted_jobs_on_startup,
         }
 
     def tenant_key(tenant_id: Optional[str]) -> str:
@@ -757,11 +771,24 @@ def create_app(
         )
 
         outputs: dict[str, Any] = {}
-        first_losses = None
-        last_losses = None
-        mark_job(job.job_id, status="running", progress={"step": 0, "total_steps": request.steps})
+        existing_progress = dict(get_job_record(job.job_id).progress)
+        start_step = int(existing_progress.get("step", 0))
+        first_losses = existing_progress.get("first_losses")
+        last_losses = existing_progress.get("last_losses")
+        progress_request = existing_progress.get("request", _model_to_dict(request))
+        mark_job(
+            job.job_id,
+            status="running",
+            progress={
+                "step": start_step,
+                "total_steps": request.steps,
+                "request": progress_request,
+                "first_losses": first_losses,
+                "last_losses": last_losses,
+            },
+        )
         try:
-            for step in range(request.steps):
+            for step in range(start_step, request.steps):
                 if get_job_record(job.job_id).status == "canceling":
                     mark_job(job.job_id, status="canceled", progress={"step": step, "total_steps": request.steps})
                     raise RuntimeError("Job canceled")
@@ -791,6 +818,8 @@ def create_app(
                     progress={
                         "step": step + 1,
                         "total_steps": request.steps,
+                        "request": progress_request,
+                        "first_losses": first_losses,
                         "last_losses": losses,
                     },
                 )
@@ -822,6 +851,28 @@ def create_app(
                 if run_id in records:
                     mark_run_failed(run_id, exc)
             raise
+
+    def resume_interrupted_train_jobs() -> None:
+        if not resume_interrupted_jobs_on_startup:
+            return
+        for job in list(jobs.values()):
+            if job.kind != "train_steps" or job.status != "queued":
+                continue
+            request_payload = job.progress.get("request") if isinstance(job.progress, dict) else None
+            if request_payload is None:
+                continue
+            missing_runs = [run_id for run_id in job.run_ids if run_id not in runs]
+            if missing_runs:
+                mark_job(
+                    job.job_id,
+                    status="failed",
+                    error=f"Cannot resume job; runs are not resident after restart: {missing_runs}",
+                )
+                continue
+            request = TrainStepsRequest(**request_payload)
+            executor.submit(lambda request=request, job=job: run_train_steps(request, job))
+
+    resume_interrupted_train_jobs()
 
     @app.post("/runs", response_model=CreateRunResponse)
     def create_run(request: CreateRunRequest) -> CreateRunResponse:
@@ -910,6 +961,14 @@ def create_app(
         tenant_id = tenant_for_runs(list(request.batches), request.tenant_id)
         enforce_tenant_rate_limit(tenant_id, "train_steps")
         job = create_job("train_steps", list(request.batches), tenant_id)
+        mark_job(
+            job.job_id,
+            progress={
+                "step": 0,
+                "total_steps": request.steps,
+                "request": _model_to_dict(request),
+            },
+        )
         if request.run_async:
             future = executor.submit(lambda: run_train_steps(request, job))
 

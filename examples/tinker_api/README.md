@@ -226,7 +226,8 @@ python examples/tinker_api/run_mixed_lora_server.py \
   --max-resident-adapters 8 \
   --max-runs-per-tenant 2 \
   --tenant-rate-limit-per-minute 120 \
-  --restore-runs-on-startup
+  --restore-runs-on-startup \
+  --resume-interrupted-jobs-on-startup
 ```
 
 Clients then pass `--api-key dev-secret`. Runs and `POST /train_steps` can also
@@ -234,6 +235,11 @@ carry a `tenant_id`; one training job may not mix runs from different tenants.
 The server enforces both the global resident-adapter cap and the optional
 per-tenant resident-run and requests-per-minute caps. Requests without a
 `tenant_id` share a `_default` tenant bucket.
+
+If the service restarts while an async `POST /train_steps` job is queued or
+running, `--resume-interrupted-jobs-on-startup` requeues persisted training jobs
+from their last completed step after resident runs have been restored. This is
+step-boundary continuation, not mid-forward/backward checkpointing.
 
 Start the server:
 
@@ -362,6 +368,22 @@ includes backward. The `grouped` path is closer to the desired production
 kernel contract, but it still relies on PyTorch batched operations and dynamic
 weight stacking.
 
+### RL Losses
+
+`forward_backward`, `mixed_forward_backward`, and `train_steps` accept these
+`loss_fn` values:
+
+- `cross_entropy`: SFT-style token cross entropy.
+- `importance_sampling`: policy-gradient style `-ratio * advantage`.
+- `ppo`: clipped-ratio policy objective with optional `kl_coef`.
+- `cispo`: clipped importance-sampling objective.
+- `dro`: sequence-level robust weighting over token cross entropy.
+
+The RL modes use `loss_fn_inputs` fields when present: `weights`, `advantages`,
+`logprobs`, `ref_logprobs`, `clip_epsilon`, `kl_coef`, and `dro_eta`. Missing
+old/reference logprobs default to the current detached target logprobs, which
+keeps smoke tests usable while still accepting Tinker-style payloads.
+
 The production kernels that remain are:
 
 1. A grouped mixed-adapter LoRA forward kernel that consumes flattened token
@@ -379,9 +401,7 @@ delta path and, later, the small-adapter optimizer path.
 
 ## Next Steps
 
-1. Add active job continuation after restart.
-2. Add built-in RL losses that match Tinker-style `importance_sampling`, `ppo`,
-   `cispo`, and `dro` inputs.
-3. Replace per-range LoRA launches with grouped mixed-adapter LoRA kernels
+1. Tighten RL loss parity against the real Tinker server formulas.
+2. Replace per-range LoRA launches with grouped mixed-adapter LoRA kernels
    inspired by mLoRA.
-4. Add multi-process worker management.
+3. Add multi-process worker management.

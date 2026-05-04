@@ -18,7 +18,11 @@ import torch
 from nemo_automodel.services.tinker_api import client as tinker_client
 from nemo_automodel.services.tinker_api.client import _build_batch
 from nemo_automodel.services.tinker_api.future import APIFuture
-from nemo_automodel.services.tinker_api.mixed_client import MixedAdapterLinearLoRA, MixedLoraServiceClient
+from nemo_automodel.services.tinker_api.mixed_client import (
+    MixedAdapterLinearLoRA,
+    MixedLoraServiceClient,
+    _rl_token_loss,
+)
 from nemo_automodel.services.tinker_api.types import Datum, ModelInput
 
 
@@ -39,6 +43,49 @@ def test_build_batch_pads_and_masks_weights():
 
     assert input_ids.tolist() == [[10, 11, 12], [20, 21, 0]]
     assert labels.tolist() == [[-100, 11, 12], [20, 21, -100]]
+
+
+@pytest.mark.parametrize("loss_fn", ["importance_sampling", "ppo", "cispo", "dro"])
+def test_rl_token_loss_modes_return_finite_weighted_loss(loss_fn):
+    data = [
+        Datum(
+            model_input=ModelInput.from_ints([1, 2, 3]),
+            loss_fn_inputs={
+                "weights": [0.0, 1.0, 1.0],
+                "advantages": [0.0, 1.5, -0.5],
+                "logprobs": [0.0, -1.1, -1.2],
+                "ref_logprobs": [0.0, -1.0, -1.0],
+                "clip_epsilon": 0.2,
+                "kl_coef": 0.1,
+                "dro_eta": 0.5,
+            },
+        ),
+        Datum(
+            model_input=ModelInput.from_ints([4, 5, 6]),
+            loss_fn_inputs={
+                "weights": [0.0, 1.0, 0.0],
+                "advantages": [0.0, 0.25, 0.0],
+                "logprobs": [0.0, -0.9, 0.0],
+            },
+        ),
+    ]
+    per_token_loss = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    gathered = torch.tensor([[-1.0, -1.4], [-0.7, -0.1]])
+    token_mask = torch.tensor([[True, True], [True, False]])
+
+    token_loss, effective_mask, metrics = _rl_token_loss(
+        loss_fn=loss_fn,
+        per_token_loss=per_token_loss,
+        gathered_logprobs=gathered,
+        data=data,
+        token_mask=token_mask,
+        device=torch.device("cpu"),
+    )
+
+    assert token_loss.shape == per_token_loss.shape
+    assert torch.isfinite(token_loss[effective_mask]).all()
+    assert effective_mask.tolist() == [[True, True], [True, False]]
+    assert metrics["loss_weight_mean"] == 1.0
 
 
 def test_mixed_lora_layer_routes_ranges_with_torch_fallback():

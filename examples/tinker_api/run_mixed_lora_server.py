@@ -41,6 +41,11 @@ def main() -> None:
         help="Rehydrate persisted runs that have a checkpoint path instead of marking them detached.",
     )
     parser.add_argument(
+        "--resume-interrupted-jobs-on-startup",
+        action="store_true",
+        help="Resume persisted train_steps jobs from their last completed step after run rehydration.",
+    )
+    parser.add_argument(
         "--metadata-backend",
         choices=("sqlite", "json"),
         default="sqlite",
@@ -77,6 +82,7 @@ def main() -> None:
         use_triton_lora=args.use_triton_lora,
         metadata_backend=args.metadata_backend,
         restore_runs_on_startup=args.restore_runs_on_startup,
+        resume_interrupted_jobs_on_startup=args.resume_interrupted_jobs_on_startup,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 
