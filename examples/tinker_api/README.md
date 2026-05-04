@@ -43,7 +43,8 @@ control-plane semantics before adding mLoRA-style multi-adapter batching.
 - Adapter execution is serialized with a lock.
 - Adapter weights are swapped through one patched model rather than batched together.
 - Only `cross_entropy` is implemented.
-- The API is in-process Python, not HTTP or gRPC yet.
+- The core training worker is still in-process; the HTTP layer is a thin
+  FastAPI wrapper without durable orchestration.
 - `--force-hf` is useful for arbitrary Hugging Face smoke-test models; AutoModel-native
   loading should be used for supported production targets.
 
@@ -170,10 +171,54 @@ This mixed path is intentionally single-node and pure PyTorch. It is useful for
 validating the runtime shape, but production throughput would still need grouped
 or fused LoRA kernels and distributed-aware adapter sharding.
 
+## HTTP API Prototype
+
+The experimental branch also includes a thin FastAPI wrapper around the
+single-process mixed-LoRA worker. It is intentionally in-memory and single-node,
+but it exposes the first real service contract:
+
+```text
+GET  /health
+POST /runs
+GET  /runs
+POST /runs/{run_id}/forward_backward
+POST /mixed_forward_backward
+POST /runs/{run_id}/optim_step
+POST /runs/{run_id}/save
+POST /runs/{run_id}/sample
+```
+
+Start the server:
+
+```bash
+python examples/tinker_api/run_mixed_lora_server.py \
+  --base-model Qwen/Qwen3-0.6B \
+  --scratch-dir /home/scratch.asteiner \
+  --cache-dir /home/scratch.asteiner/hf \
+  --rank 16 \
+  --host 127.0.0.1 \
+  --port 18080
+```
+
+In another shell, run a small client smoke:
+
+```bash
+python examples/tinker_api/api_smoke_client.py \
+  --base-url http://127.0.0.1:18080 \
+  --base-model Qwen/Qwen3-0.6B \
+  --cache-dir /home/scratch.asteiner/hf \
+  --steps 20
+```
+
+This API layer is not production hardened. It has no auth, no durable DB, no
+background queue, no cancellation, and no multi-process worker management yet.
+Its purpose is to freeze the basic Tinker-like HTTP contract around the mixed
+training worker.
+
 ## Next Steps
 
 1. Add a process-local request queue around the shared worker.
-2. Add an HTTP/gRPC service wrapper.
+2. Add durable run metadata and restart recovery.
 3. Add built-in RL losses that match Tinker-style `importance_sampling`, `ppo`,
    `cispo`, and `dro` inputs.
 4. Replace serialized adapter swapping with multi-adapter batching or fused LoRA
