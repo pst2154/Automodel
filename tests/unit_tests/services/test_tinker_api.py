@@ -227,6 +227,66 @@ def test_mixed_lora_layer_triton_bridge_matches_torch_forward_backward():
         )
 
 
+@pytest.mark.run_only_on("GPU")
+def test_mixed_lora_layer_grouped_triton_matches_torch_forward_backward():
+    torch.manual_seed(1234)
+    base_ref = torch.nn.Linear(8, 6, bias=False, device="cuda")
+    base_grouped_triton = torch.nn.Linear(8, 6, bias=False, device="cuda")
+    base_grouped_triton.weight.data.copy_(base_ref.weight)
+
+    layer_ref = MixedAdapterLinearLoRA(
+        base_ref,
+        rank=2,
+        alpha=4,
+        dropout=0.0,
+        lora_dtype=torch.float32,
+        backend="loop",
+    )
+    layer_grouped_triton = MixedAdapterLinearLoRA(
+        base_grouped_triton,
+        rank=2,
+        alpha=4,
+        dropout=0.0,
+        lora_dtype=torch.float32,
+        backend="grouped_triton",
+    )
+    for adapter_id in ["atlas", "borealis", "cygnus"]:
+        layer_ref.add_adapter(adapter_id)
+        layer_grouped_triton.add_adapter(adapter_id)
+        layer_ref.lora_a[adapter_id].data.normal_(mean=0.0, std=0.05)
+        layer_ref.lora_b[adapter_id].data.normal_(mean=0.0, std=0.05)
+        layer_grouped_triton.lora_a[adapter_id].data.copy_(layer_ref.lora_a[adapter_id])
+        layer_grouped_triton.lora_b[adapter_id].data.copy_(layer_ref.lora_b[adapter_id])
+
+    ranges = [("atlas", 0, 1), ("borealis", 1, 3), ("cygnus", 3, 4)]
+    layer_ref.set_active_ranges(ranges)
+    layer_grouped_triton.set_active_ranges(ranges)
+    x_ref = torch.randn(4, 5, 8, device="cuda", requires_grad=True)
+    x_grouped_triton = x_ref.detach().clone().requires_grad_(True)
+
+    out_ref = layer_ref(x_ref)
+    out_grouped_triton = layer_grouped_triton(x_grouped_triton)
+    out_ref.pow(2).sum().backward()
+    out_grouped_triton.pow(2).sum().backward()
+
+    assert layer_grouped_triton._can_use_grouped_triton_lora(x_grouped_triton)
+    assert torch.allclose(out_grouped_triton, out_ref, atol=2e-4, rtol=2e-4)
+    assert torch.allclose(x_grouped_triton.grad, x_ref.grad, atol=1e-3, rtol=1e-3)
+    for adapter_id in ["atlas", "borealis", "cygnus"]:
+        assert torch.allclose(
+            layer_grouped_triton.lora_a[adapter_id].grad,
+            layer_ref.lora_a[adapter_id].grad,
+            atol=1e-3,
+            rtol=1e-3,
+        )
+        assert torch.allclose(
+            layer_grouped_triton.lora_b[adapter_id].grad,
+            layer_ref.lora_b[adapter_id].grad,
+            atol=1e-3,
+            rtol=1e-3,
+        )
+
+
 def test_service_reuses_worker_for_matching_base_and_lora_config(monkeypatch, tmp_path):
     created_workers = []
 

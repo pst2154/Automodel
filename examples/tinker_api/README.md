@@ -331,7 +331,7 @@ training worker while keeping the implementation pure Python.
 
 ### Mixed-LoRA Backends
 
-The prototype now has three backend modes for the adapter delta inside each
+The prototype now has four backend modes for the adapter delta inside each
 patched linear layer:
 
 - `loop`: original PyTorch implementation, one adapter range at a time.
@@ -339,6 +339,8 @@ patched linear layer:
   weights and computes all active row deltas in one batched operation.
 - `triton`: AutoModel's existing PEFT `LoRATritonFunction`, called once per
   active adapter range.
+- `grouped_triton`: experimental grouped mixed-adapter Triton path that takes
+  one adapter id per active batch row and launches across the mixed batch.
 
 Use the grouped reference path when you want to mimic the shape of an mLoRA
 grouped kernel without compiling a new kernel:
@@ -368,6 +370,24 @@ includes backward. The `grouped` path is closer to the desired production
 kernel contract, but it still relies on PyTorch batched operations and dynamic
 weight stacking.
 
+Use the grouped Triton path when you want to exercise the first real
+mixed-adapter kernel surface:
+
+```bash
+python examples/tinker_api/run_mixed_lora_server.py \
+  --base-model Qwen/Qwen3-0.6B \
+  --scratch-dir /home/scratch.asteiner \
+  --cache-dir /home/scratch.asteiner/hf \
+  --rank 16 \
+  --mixed-lora-backend grouped_triton
+```
+
+`grouped_triton` currently uses Triton for the LoRA forward delta and
+input-gradient (`dX`) computation. Adapter weight gradients (`dA`/`dB`) still
+use PyTorch reductions over the selected adapter bank, which gives us a tested
+adapter-id routing contract before replacing those reductions with segmented
+atomic kernels.
+
 ### RL Losses
 
 `forward_backward`, `mixed_forward_backward`, and `train_steps` accept these
@@ -387,11 +407,10 @@ summed over tokens to match Tinker diagnostics.
 
 The production kernels that remain are:
 
-1. A grouped mixed-adapter LoRA forward kernel that consumes flattened token
-   rows plus an adapter-id vector and computes `x @ A_i.T @ B_i.T` without one
-   launch per adapter range.
-2. Matching grouped backward kernels for `dX`, `dA_i`, and `dB_i` with
-   segmented reductions by adapter.
+1. Segmented grouped adapter-gradient kernels for `dA_i` and `dB_i` using
+   adapter-id routing and atomic reductions into resident adapter banks.
+2. Benchmarks comparing `loop`, `grouped`, `triton`, and `grouped_triton` on
+   realistic Qwen hidden sizes, rank 16/32, and mixed tenant batch shapes.
 3. Optional fused optimizer updates for many small adapter tensors, once the
    training service has enough resident-adapter churn to make Python optimizer
    overhead visible.
@@ -403,6 +422,6 @@ delta path and, later, the small-adapter optimizer path.
 ## Next Steps
 
 1. Add golden-value parity tests against the live Tinker service.
-2. Replace per-range LoRA launches with grouped mixed-adapter LoRA kernels
-   inspired by mLoRA.
+2. Finish grouped mixed-adapter LoRA kernels by moving `dA`/`dB` reductions
+   from PyTorch to Triton segmented atomic kernels.
 3. Add multi-process worker management.

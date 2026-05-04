@@ -53,7 +53,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--mixed-lora-backend",
-        choices=("loop", "grouped", "triton"),
+        choices=("loop", "grouped", "triton", "grouped_triton"),
         default="loop",
         help="Mixed-adapter LoRA delta backend.",
     )

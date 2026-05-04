@@ -44,8 +44,17 @@ HAS_LORA_TRITON_FUNCTION, LoRATritonFunction = safe_import_from(
     "LoRATritonFunction",
 )
 _, HAVE_TRITON = safe_import_from("nemo_automodel.components._peft.lora_kernel", "HAVE_TRITON", alt=False)
+HAS_GROUPED_LORA_TRITON, GroupedLoRATritonFunction = safe_import_from(
+    "nemo_automodel.services.tinker_api.grouped_lora_kernel",
+    "GroupedLoRATritonFunction",
+)
+_, HAVE_GROUPED_LORA_TRITON = safe_import_from(
+    "nemo_automodel.services.tinker_api.grouped_lora_kernel",
+    "HAVE_GROUPED_LORA_TRITON",
+    alt=False,
+)
 
-MixedLoraBackend = Literal["loop", "grouped", "triton"]
+MixedLoraBackend = Literal["loop", "grouped", "triton", "grouped_triton"]
 SUPPORTED_LOSS_FNS = {"cross_entropy", "importance_sampling", "ppo", "cispo", "dro"}
 
 
@@ -193,7 +202,7 @@ class MixedAdapterLinearLoRA(nn.Module):
         super().__init__()
         if use_triton_lora:
             backend = "triton"
-        if backend not in {"loop", "grouped", "triton"}:
+        if backend not in {"loop", "grouped", "triton", "grouped_triton"}:
             raise ValueError(f"Unknown mixed LoRA backend: {backend}")
         self.base_linear = base_linear
         self.rank = rank
@@ -263,6 +272,17 @@ class MixedAdapterLinearLoRA(nn.Module):
         """Return whether the vectorized grouped PyTorch backend can handle this batch."""
         return self.backend == "grouped" and self.dropout == 0 and x.dim() in {2, 3}
 
+    def _can_use_grouped_triton_lora(self, x: torch.Tensor) -> bool:
+        """Return whether the grouped mixed-adapter Triton kernel can handle this batch."""
+        return bool(
+            self.backend == "grouped_triton"
+            and self.dropout == 0
+            and HAS_GROUPED_LORA_TRITON
+            and HAVE_GROUPED_LORA_TRITON
+            and x.is_cuda
+            and x.dim() in {2, 3}
+        )
+
     def _active_row_adapter_ids(self, batch_size: int) -> list[str]:
         """Expand active ranges into one adapter id per leading batch row."""
         row_adapter_ids = [""] * batch_size
@@ -301,6 +321,36 @@ class MixedAdapterLinearLoRA(nn.Module):
         delta.index_copy_(0, row_index, active_delta * self.scale)
         return delta
 
+    def _grouped_triton_adapter_delta(self, x: torch.Tensor, result_dtype: torch.dtype) -> torch.Tensor:
+        """Compute all active adapter deltas in one grouped Triton launch."""
+        row_adapter_ids = self._active_row_adapter_ids(x.shape[0])
+        active_rows = [idx for idx, adapter_id in enumerate(row_adapter_ids) if adapter_id]
+        if not active_rows:
+            return torch.zeros(*x.shape[:-1], self.out_features, device=x.device, dtype=result_dtype)
+
+        active_adapter_ids = sorted({row_adapter_ids[idx] for idx in active_rows})
+        adapter_id_to_bank_idx = {adapter_id: idx for idx, adapter_id in enumerate(active_adapter_ids)}
+        row_index = torch.tensor(active_rows, device=x.device, dtype=torch.long)
+        adapter_indices = torch.tensor(
+            [adapter_id_to_bank_idx[row_adapter_ids[idx]] for idx in active_rows],
+            device=x.device,
+            dtype=torch.long,
+        )
+        x_active = x.index_select(0, row_index).to(self.lora_dtype)
+        lora_a_bank = torch.stack([self.lora_a[adapter_id] for adapter_id in active_adapter_ids])
+        lora_b_bank = torch.stack([self.lora_b[adapter_id] for adapter_id in active_adapter_ids])
+        active_delta = GroupedLoRATritonFunction.apply(
+            x_active,
+            adapter_indices,
+            lora_a_bank,
+            lora_b_bank,
+            self.scale,
+            result_dtype,
+        )
+        delta = torch.zeros(*x.shape[:-1], self.out_features, device=x.device, dtype=result_dtype)
+        delta.index_copy_(0, row_index, active_delta.to(result_dtype))
+        return delta
+
     def _adapter_delta(self, adapter_id: str, x: torch.Tensor, result_dtype: torch.dtype) -> torch.Tensor:
         """Compute one adapter's LoRA delta with the selected backend."""
         x_lora = x.to(self.lora_dtype)
@@ -323,6 +373,9 @@ class MixedAdapterLinearLoRA(nn.Module):
 
         if self._can_use_grouped_lora(x):
             return result + self._grouped_adapter_delta(x).to(result.dtype)
+
+        if self._can_use_grouped_triton_lora(x):
+            return result + self._grouped_triton_adapter_delta(x, result.dtype)
 
         for adapter_id, start_idx, end_idx in self.active_ranges:
             if adapter_id not in self.lora_a:
@@ -364,7 +417,7 @@ class MixedLoraServiceClient:
 
         if use_triton_lora:
             mixed_lora_backend = "triton"
-        if mixed_lora_backend not in {"loop", "grouped", "triton"}:
+        if mixed_lora_backend not in {"loop", "grouped", "triton", "grouped_triton"}:
             raise ValueError(f"Unknown mixed LoRA backend: {mixed_lora_backend}")
         self.base_model = base_model
         self.scratch_dir = pathlib.Path(scratch_dir)
