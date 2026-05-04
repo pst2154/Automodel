@@ -18,6 +18,7 @@ import torch
 from nemo_automodel.services.tinker_api import client as tinker_client
 from nemo_automodel.services.tinker_api.client import _build_batch
 from nemo_automodel.services.tinker_api.future import APIFuture
+from nemo_automodel.services.tinker_api.grouped_lora_kernel import grouped_lora_da_db_wrapper
 from nemo_automodel.services.tinker_api.mixed_client import (
     MixedAdapterLinearLoRA,
     MixedLoraServiceClient,
@@ -285,6 +286,30 @@ def test_mixed_lora_layer_grouped_triton_matches_torch_forward_backward():
             atol=1e-3,
             rtol=1e-3,
         )
+
+
+@pytest.mark.run_only_on("GPU")
+def test_grouped_lora_da_db_kernels_match_torch_reductions():
+    torch.manual_seed(1234)
+    x = torch.randn(7, 8, device="cuda", dtype=torch.float32)
+    grad_out = torch.randn(7, 6, device="cuda", dtype=torch.float32)
+    adapter_indices = torch.tensor([0, 1, 0, 2, 1, 2, 2], device="cuda", dtype=torch.long)
+    lora_a_bank = torch.randn(3, 2, 8, device="cuda", dtype=torch.float32) * 0.05
+    lora_b_bank = torch.randn(3, 6, 2, device="cuda", dtype=torch.float32) * 0.05
+    scale = 2.0
+
+    grad_a, grad_b = grouped_lora_da_db_wrapper(x, grad_out, adapter_indices, lora_a_bank, lora_b_bank, scale)
+
+    expected_grad_a = torch.zeros_like(lora_a_bank)
+    expected_grad_b = torch.zeros_like(lora_b_bank)
+    for row_idx, adapter_idx in enumerate(adapter_indices.tolist()):
+        hidden = torch.matmul(lora_a_bank[adapter_idx], x[row_idx])
+        grad_hidden = torch.matmul(grad_out[row_idx], lora_b_bank[adapter_idx]) * scale
+        expected_grad_a[adapter_idx] += grad_hidden[:, None] * x[row_idx][None, :]
+        expected_grad_b[adapter_idx] += grad_out[row_idx][:, None] * hidden[None, :] * scale
+
+    assert torch.allclose(grad_a, expected_grad_a, atol=1e-5, rtol=1e-5)
+    assert torch.allclose(grad_b, expected_grad_b, atol=1e-5, rtol=1e-5)
 
 
 def test_service_reuses_worker_for_matching_base_and_lora_config(monkeypatch, tmp_path):

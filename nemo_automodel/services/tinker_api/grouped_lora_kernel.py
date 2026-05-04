@@ -283,8 +283,209 @@ def grouped_lora_dx_wrapper(
     return grad_x
 
 
+@triton.jit
+def _grouped_lora_da_kernel(
+    x_ptr,
+    grad_out_ptr,
+    adapter_indices_ptr,
+    lora_b_ptr,
+    grad_a_ptr,
+    M,
+    K,
+    R,
+    L,
+    stride_x_m,
+    stride_x_k,
+    stride_grad_m,
+    stride_grad_l,
+    stride_b_adapter,
+    stride_b_l,
+    stride_b_r,
+    stride_grad_a_adapter,
+    stride_grad_a_r,
+    stride_grad_a_k,
+    scale,
+    BLOCK_M: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    BLOCK_L: tl.constexpr,
+):
+    """Compute grouped LoRA A gradients for one adapter/rank/input-feature tile."""
+    adapter_id = tl.program_id(axis=0)
+    r_idx = tl.program_id(axis=1)
+    pid_k = tl.program_id(axis=2)
+    cols_k = pid_k * BLOCK_K + tl.arange(0, BLOCK_K)
+    rows = tl.arange(0, BLOCK_M)
+    cols_l = tl.arange(0, BLOCK_L)
+    acc = tl.zeros((BLOCK_K,), dtype=tl.float32)
+
+    for m_start in tl.range(0, M, BLOCK_M):
+        row_offsets = m_start + rows
+        row_mask = row_offsets < M
+        row_adapter_ids = tl.load(adapter_indices_ptr + row_offsets, mask=row_mask, other=-1)
+        adapter_mask = row_adapter_ids == adapter_id
+        grad_hidden = tl.zeros((BLOCK_M,), dtype=tl.float32)
+        grad_ptrs = grad_out_ptr + row_offsets[:, None] * stride_grad_m + cols_l[None, :] * stride_grad_l
+        b_ptrs = lora_b_ptr + adapter_id * stride_b_adapter + cols_l * stride_b_l + r_idx * stride_b_r
+        for l_start in tl.range(0, L, BLOCK_L):
+            l_mask = cols_l < L - l_start
+            grad_out = tl.load(grad_ptrs, mask=row_mask[:, None] & l_mask[None, :], other=0.0)
+            b = tl.load(b_ptrs, mask=l_mask, other=0.0)
+            grad_hidden += tl.sum(grad_out * b[None, :], axis=1)
+            grad_ptrs += BLOCK_L * stride_grad_l
+            b_ptrs += BLOCK_L * stride_b_l
+
+        x_ptrs = x_ptr + row_offsets[:, None] * stride_x_m + cols_k[None, :] * stride_x_k
+        x_mask = row_mask[:, None] & adapter_mask[:, None] & (cols_k[None, :] < K)
+        x = tl.load(x_ptrs, mask=x_mask, other=0.0)
+        acc += tl.sum((grad_hidden * scale)[:, None] * x, axis=0)
+
+    grad_a_ptrs = grad_a_ptr + adapter_id * stride_grad_a_adapter + r_idx * stride_grad_a_r + cols_k * stride_grad_a_k
+    tl.store(grad_a_ptrs, acc, mask=cols_k < K)
+
+
+@triton.jit
+def _grouped_lora_db_kernel(
+    x_ptr,
+    grad_out_ptr,
+    adapter_indices_ptr,
+    lora_a_ptr,
+    grad_b_ptr,
+    M,
+    K,
+    R,
+    L,
+    stride_x_m,
+    stride_x_k,
+    stride_grad_m,
+    stride_grad_l,
+    stride_a_adapter,
+    stride_a_r,
+    stride_a_k,
+    stride_grad_b_adapter,
+    stride_grad_b_l,
+    stride_grad_b_r,
+    scale,
+    BLOCK_M: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    BLOCK_L: tl.constexpr,
+):
+    """Compute grouped LoRA B gradients for one adapter/output-feature/rank tile."""
+    adapter_id = tl.program_id(axis=0)
+    pid_l = tl.program_id(axis=1)
+    r_idx = tl.program_id(axis=2)
+    cols_l = pid_l * BLOCK_L + tl.arange(0, BLOCK_L)
+    rows = tl.arange(0, BLOCK_M)
+    cols_k = tl.arange(0, BLOCK_K)
+    acc = tl.zeros((BLOCK_L,), dtype=tl.float32)
+
+    for m_start in tl.range(0, M, BLOCK_M):
+        row_offsets = m_start + rows
+        row_mask = row_offsets < M
+        row_adapter_ids = tl.load(adapter_indices_ptr + row_offsets, mask=row_mask, other=-1)
+        adapter_mask = row_adapter_ids == adapter_id
+        hidden = tl.zeros((BLOCK_M,), dtype=tl.float32)
+        x_ptrs = x_ptr + row_offsets[:, None] * stride_x_m + cols_k[None, :] * stride_x_k
+        a_ptrs = lora_a_ptr + adapter_id * stride_a_adapter + r_idx * stride_a_r + cols_k * stride_a_k
+        for k_start in tl.range(0, K, BLOCK_K):
+            k_mask = cols_k < K - k_start
+            x = tl.load(x_ptrs, mask=row_mask[:, None] & k_mask[None, :], other=0.0)
+            a = tl.load(a_ptrs, mask=k_mask, other=0.0)
+            hidden += tl.sum(x * a[None, :], axis=1)
+            x_ptrs += BLOCK_K * stride_x_k
+            a_ptrs += BLOCK_K * stride_a_k
+
+        grad_ptrs = grad_out_ptr + row_offsets[:, None] * stride_grad_m + cols_l[None, :] * stride_grad_l
+        grad_mask = row_mask[:, None] & adapter_mask[:, None] & (cols_l[None, :] < L)
+        grad_out = tl.load(grad_ptrs, mask=grad_mask, other=0.0)
+        acc += tl.sum(grad_out * (hidden * scale)[:, None], axis=0)
+
+    grad_b_ptrs = grad_b_ptr + adapter_id * stride_grad_b_adapter + cols_l * stride_grad_b_l + r_idx * stride_grad_b_r
+    tl.store(grad_b_ptrs, acc, mask=cols_l < L)
+
+
+def grouped_lora_da_db_wrapper(
+    x: torch.Tensor,
+    grad_out: torch.Tensor,
+    adapter_indices: torch.Tensor,
+    lora_a_bank: torch.Tensor,
+    lora_b_bank: torch.Tensor,
+    scale: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Launch grouped mixed-adapter LoRA adapter-gradient kernels."""
+    if not HAVE_GROUPED_LORA_TRITON:
+        raise ImportError(MISSING_TRITON_MSG)
+    if x.dim() != 2 or grad_out.dim() != 2:
+        raise ValueError("grouped_lora_da_db_wrapper expects 2D x and grad_out tensors")
+    if adapter_indices.dim() != 1 or adapter_indices.shape[0] != x.shape[0]:
+        raise ValueError("adapter_indices must be a 1D tensor with one id per input row")
+
+    x = x.contiguous()
+    grad_out = grad_out.contiguous()
+    adapter_indices = adapter_indices.to(device=x.device, dtype=torch.int64).contiguous()
+    lora_a_bank = lora_a_bank.contiguous()
+    lora_b_bank = lora_b_bank.contiguous()
+    m, hidden = x.shape
+    _, out_features = grad_out.shape
+    adapter_count, rank, _ = lora_a_bank.shape
+    grad_a = torch.empty_like(lora_a_bank)
+    grad_b = torch.empty_like(lora_b_bank)
+    block_k = min(64, triton.next_power_of_2(hidden))
+    block_l = min(64, triton.next_power_of_2(out_features))
+    _grouped_lora_da_kernel[(adapter_count, rank, triton.cdiv(hidden, block_k))](
+        x,
+        grad_out,
+        adapter_indices,
+        lora_b_bank,
+        grad_a,
+        m,
+        hidden,
+        rank,
+        out_features,
+        x.stride(0),
+        x.stride(1),
+        grad_out.stride(0),
+        grad_out.stride(1),
+        lora_b_bank.stride(0),
+        lora_b_bank.stride(1),
+        lora_b_bank.stride(2),
+        grad_a.stride(0),
+        grad_a.stride(1),
+        grad_a.stride(2),
+        scale,
+        BLOCK_M=16,
+        BLOCK_K=block_k,
+        BLOCK_L=block_l,
+    )
+    _grouped_lora_db_kernel[(adapter_count, triton.cdiv(out_features, block_l), rank)](
+        x,
+        grad_out,
+        adapter_indices,
+        lora_a_bank,
+        grad_b,
+        m,
+        hidden,
+        rank,
+        out_features,
+        x.stride(0),
+        x.stride(1),
+        grad_out.stride(0),
+        grad_out.stride(1),
+        lora_a_bank.stride(0),
+        lora_a_bank.stride(1),
+        lora_a_bank.stride(2),
+        grad_b.stride(0),
+        grad_b.stride(1),
+        grad_b.stride(2),
+        scale,
+        BLOCK_M=16,
+        BLOCK_K=block_k,
+        BLOCK_L=block_l,
+    )
+    return grad_a, grad_b
+
+
 class GroupedLoRATritonFunction(torch.autograd.Function):
-    """Grouped LoRA autograd wrapper using a Triton forward kernel and PyTorch reductions for backward."""
+    """Grouped LoRA autograd wrapper backed by Triton kernels."""
 
     @staticmethod
     def forward(ctx, x, adapter_indices, lora_a_bank, lora_b_bank, scale, dtype):
@@ -309,24 +510,21 @@ class GroupedLoRATritonFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_out):
-        """Compute grouped LoRA gradients with differentiable PyTorch reductions."""
+        """Compute grouped LoRA gradients."""
         x_2d, adapter_indices, lora_a_bank, lora_b_bank = ctx.saved_tensors
         scale = ctx.scale
         grad_2d = grad_out.reshape(-1, grad_out.shape[-1]).to(lora_b_bank.dtype)
         x_lora = x_2d.to(lora_a_bank.dtype)
 
-        selected_a = lora_a_bank.index_select(0, adapter_indices)
-        selected_b = lora_b_bank.index_select(0, adapter_indices)
-        hidden = torch.einsum("mk,mrk->mr", x_lora, selected_a)
-        grad_hidden = torch.einsum("ml,mlr->mr", grad_2d, selected_b) * scale
         grad_x = grouped_lora_dx_wrapper(grad_2d, adapter_indices, lora_a_bank, lora_b_bank, scale, x_2d.dtype)
-
-        grad_a_bank = torch.zeros_like(lora_a_bank)
-        grad_b_bank = torch.zeros_like(lora_b_bank)
-        grad_a_rows = torch.einsum("mr,mk->mrk", grad_hidden, x_lora)
-        grad_b_rows = torch.einsum("ml,mr->mlr", grad_2d, hidden) * scale
-        grad_a_bank.index_add_(0, adapter_indices, grad_a_rows)
-        grad_b_bank.index_add_(0, adapter_indices, grad_b_rows)
+        grad_a_bank, grad_b_bank = grouped_lora_da_db_wrapper(
+            x_lora,
+            grad_2d,
+            adapter_indices,
+            lora_a_bank,
+            lora_b_bank,
+            scale,
+        )
 
         if ctx.reshape:
             grad_x = grad_x.view(ctx.original_shape)

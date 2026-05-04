@@ -382,11 +382,11 @@ python examples/tinker_api/run_mixed_lora_server.py \
   --mixed-lora-backend grouped_triton
 ```
 
-`grouped_triton` currently uses Triton for the LoRA forward delta and
-input-gradient (`dX`) computation. Adapter weight gradients (`dA`/`dB`) still
-use PyTorch reductions over the selected adapter bank, which gives us a tested
-adapter-id routing contract before replacing those reductions with segmented
-atomic kernels.
+`grouped_triton` currently uses Triton for the LoRA forward delta, input
+gradient (`dX`), and adapter weight gradients (`dA`/`dB`). The adapter-gradient
+kernels use segmented reductions by adapter id, with each program owning an
+adapter/rank/tile output region to avoid cross-program atomics in this
+prototype.
 
 ### RL Losses
 
@@ -405,12 +405,12 @@ weight. `loss_fn_config` supports `clip_low_threshold` and
 `clip_high_threshold` for `ppo`/`cispo`, and `beta` for `dro`. Losses are
 summed over tokens to match Tinker diagnostics.
 
-The production kernels that remain are:
+The production kernel work that remains is:
 
-1. Segmented grouped adapter-gradient kernels for `dA_i` and `dB_i` using
-   adapter-id routing and atomic reductions into resident adapter banks.
-2. Benchmarks comparing `loop`, `grouped`, `triton`, and `grouped_triton` on
+1. Benchmarks comparing `loop`, `grouped`, `triton`, and `grouped_triton` on
    realistic Qwen hidden sizes, rank 16/32, and mixed tenant batch shapes.
+2. Tuning grouped Triton tile sizes and, if needed, replacing serial
+   per-output-region reductions with atomic split reductions for large batches.
 3. Optional fused optimizer updates for many small adapter tensors, once the
    training service has enough resident-adapter churn to make Python optimizer
    overhead visible.
@@ -422,6 +422,5 @@ delta path and, later, the small-adapter optimizer path.
 ## Next Steps
 
 1. Add golden-value parity tests against the live Tinker service.
-2. Finish grouped mixed-adapter LoRA kernels by moving `dA`/`dB` reductions
-   from PyTorch to Triton segmented atomic kernels.
+2. Benchmark and tune `grouped_triton` against the existing LoRA backends.
 3. Add multi-process worker management.
