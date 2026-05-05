@@ -16,8 +16,12 @@ from __future__ import annotations
 
 import argparse
 import os
+import pathlib
+import sys
 
 import uvicorn
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
 from nemo_automodel.services.tinker_api.server import create_app
 
@@ -31,7 +35,9 @@ def main() -> None:
     parser.add_argument("--alpha", type=int, default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--torch-dtype", default="bfloat16")
+    parser.add_argument("--trust-remote-code", action="store_true")
     parser.add_argument("--attn-implementation", default="sdpa")
+    parser.add_argument("--target-modules", nargs="+", default=None)
     parser.add_argument("--api-key", default=os.environ.get("TINKER_API_KEY"))
     parser.add_argument("--max-resident-adapters", type=int, default=None)
     parser.add_argument("--max-runs-per-tenant", type=int, default=None)
@@ -81,7 +87,9 @@ def main() -> None:
         alpha=args.alpha,
         device=args.device,
         torch_dtype=args.torch_dtype,
+        trust_remote_code=args.trust_remote_code,
         attn_implementation=args.attn_implementation,
+        target_modules=args.target_modules,
         api_key=args.api_key,
         max_resident_adapters=args.max_resident_adapters,
         max_runs_per_tenant=args.max_runs_per_tenant,

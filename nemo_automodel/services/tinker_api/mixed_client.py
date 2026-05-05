@@ -701,17 +701,35 @@ class MixedLoraServiceClient:
         params = params or SamplingParams()
         encoded = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         self._set_active_ranges([(adapter_id, 0, 1)])
-        self.model.eval()
-        with torch.no_grad():
-            output_ids = self.model.generate(
-                **encoded,
-                max_new_tokens=params.max_new_tokens,
-                do_sample=params.do_sample,
-                temperature=params.temperature,
-                top_p=params.top_p,
-                pad_token_id=self.tokenizer.pad_token_id,
-            )[0]
-        self._set_active_ranges([])
+        try:
+            self.model.eval()
+            output_ids = encoded["input_ids"]
+            attention_mask = encoded.get("attention_mask")
+            with torch.no_grad():
+                for _ in range(params.max_new_tokens):
+                    outputs = self.model(input_ids=output_ids, attention_mask=attention_mask)
+                    next_token_logits = outputs.logits[:, -1, :]
+                    if params.do_sample:
+                        temperature = max(params.temperature, 1e-6)
+                        probs = torch.softmax(next_token_logits / temperature, dim=-1)
+                        if params.top_p < 1.0:
+                            sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+                            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                            sorted_mask = cumulative_probs > params.top_p
+                            sorted_mask[..., 1:] = sorted_mask[..., :-1].clone()
+                            sorted_mask[..., 0] = False
+                            sorted_probs = sorted_probs.masked_fill(sorted_mask, 0.0)
+                            probs = torch.zeros_like(probs).scatter(-1, sorted_indices, sorted_probs)
+                            probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                        next_token = torch.multinomial(probs, num_samples=1)
+                    else:
+                        next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+                    output_ids = torch.cat([output_ids, next_token], dim=-1)
+                    if attention_mask is not None:
+                        attention_mask = torch.cat([attention_mask, torch.ones_like(next_token)], dim=-1)
+            output_ids = output_ids[0]
+        finally:
+            self._set_active_ranges([])
         text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
         return APIFuture(SampleResponse(tokens=output_ids.detach().cpu().tolist(), text=text))
 

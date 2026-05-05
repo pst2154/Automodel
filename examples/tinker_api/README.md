@@ -37,6 +37,8 @@ What works now:
   (`/workers/{worker_id}/ping`, `/workers/{worker_id}/echo`).
 - Opt-in live Tinker parity harness.
 - Nemotron Nano 30B A3B direct mixed-LoRA smoke.
+- Nemotron Nano 30B A3B HTTP mixed-LoRA train, inference, save, and restore
+  smoke.
 
 What is not V1-ready:
 
@@ -68,6 +70,8 @@ Ignore for tomorrow:
 - `examples/tinker_api/run_mixed_lora_server.py`: HTTP server entry point.
 - `examples/tinker_api/api_smoke_client.py`: Qwen-oriented HTTP API client
   smoke.
+- `examples/tinker_api/nemotron_nano_api_smoke_client.py`: deployed HTTP
+  Nemotron Nano train/inference smoke.
 - `examples/tinker_api/nemotron_nano_mixed_lora_smoke.py`: direct Python
   Nemotron Nano mixed-LoRA smoke.
 - `examples/tinker_api/benchmark_mixed_lora_backends.py`: backend benchmark.
@@ -171,15 +175,14 @@ POST /workers/{worker_id}/ping
 POST /workers/{worker_id}/echo
 ```
 
-Start a Nemotron HTTP server tomorrow with:
+Start a localhost-only Nemotron HTTP server on `4u8g-gen-0277` with:
 
 ```bash
 cd /home/scratch.asteiner/Automodel-kernel-test
-docker run --rm --gpus all --ipc=host \
+docker run --rm --gpus all --ipc=host --network host \
   -v /home/scratch.asteiner:/home/scratch.asteiner \
   -v /home/scratch.asteiner/Automodel-kernel-test:/workspace \
   -w /workspace \
-  -p 18080:18080 \
   nvcr.io/nvidia/nemo-automodel:26.04 \
   python examples/tinker_api/run_mixed_lora_server.py \
     --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
@@ -190,12 +193,64 @@ docker run --rm --gpus all --ipc=host \
     --mixed-lora-backend grouped \
     --attn-implementation eager \
     --torch-dtype bfloat16 \
-    --host 0.0.0.0 \
+    --trust-remote-code \
+    --target-modules q_proj k_proj v_proj o_proj \
+    --host 127.0.0.1 \
     --port 18080
 ```
 
-We have not yet completed the full live HTTP Nemotron request flow. That is the
-first task tomorrow.
+Run the deployed HTTP client from the same host:
+
+```bash
+docker run --rm --gpus all --network host \
+  -v /home/scratch.asteiner:/home/scratch.asteiner \
+  -v /home/scratch.asteiner/Automodel-kernel-test:/workspace \
+  -w /workspace \
+  nvcr.io/nvidia/nemo-automodel:26.04 \
+  python examples/tinker_api/nemotron_nano_api_smoke_client.py \
+    --base-url http://127.0.0.1:18080 \
+    --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
+    --cache-dir /home/scratch.asteiner/hf \
+    --steps 1 \
+    --lr 5e-5 \
+    --max-tokens 64 \
+    --max-new-tokens 4 \
+    --wait-for-server 900
+```
+
+HTTP smoke result from `2026-05-04`:
+
+```text
+health.status=ok
+health.mixed_lora_backend=grouped
+atlas_run=run_4e8d9bb28467 adapter=adapter_ec6bddfb0588
+borealis_run=run_2ffb4de583c4 adapter=adapter_19a829219c06
+first_losses=(52.93606185913086, 69.88380432128906)
+last_losses=(52.93606185913086, 69.88380432128906)
+atlas_before=Tenant Atlas route alpha.\nAnswer: The Tenant Atlas
+atlas_after=Tenant Atlas route alpha.\nAnswer: The route is /
+borealis_before=Tenant Borealis route alpha.\nAnswer: Borealis route
+borealis_after=Tenant Borealis route alpha.\nAnswer: Borealis route
+atlas_saved=/home/scratch.asteiner/checkpoints/nemotron-api-atlas-smoke
+borealis_saved=/home/scratch.asteiner/checkpoints/nemotron-api-borealis-smoke
+```
+
+Saved HTTP adapter directories were verified. Each contains
+`adapter_config.json`, `adapter_model.pt`, and `optimizer.pt`.
+
+Restart restore also passed after widening `RunRecord.last_metrics` to
+`dict[str, Any]`. Start the server with the same command plus
+`--restore-runs-on-startup`; `/health` reported `num_runs=2`, `/runs` showed
+both saved adapters as `ready`, and restored Atlas sampled successfully:
+
+```text
+Tenant Atlas route alpha.\nAnswer: The route is /
+```
+
+Implementation note: sampling now uses a small manual autoregressive loop
+instead of `model.generate()`. Nemotron's remote-code `generate()` path assumed
+`cache_position` was present and failed in this container. The manual loop is
+slower but sufficient for service validation and avoids kernel/compiler work.
 
 ## Backend Benchmark Result
 
@@ -217,6 +272,8 @@ tile.
 
 - Full Tinker API unit suite in container: `31 passed`.
 - Nemotron direct mixed-LoRA smoke: passed.
+- Nemotron HTTP mixed-LoRA train/inference/save smoke: passed.
+- Nemotron HTTP restart restore smoke: passed.
 - Backend benchmark smoke: passed.
 - Worker IPC ping/echo tests: passed.
 - Local `ruff` and `py_compile`: passed.
@@ -225,30 +282,29 @@ Local laptop pytest is not reliable because the local environment has a
 `tokenizers`/`transformers` version mismatch. Use the container for meaningful
 test results.
 
-## Tomorrow Plan
+## Next Plan
 
-1. **Run the full Nemotron HTTP flow.**
-   Start `run_mixed_lora_server.py` with the Nemotron command above. Then send
-   real HTTP requests to create two runs, call `/mixed_forward_backward`, call
-   `/runs/{id}/optim_step`, save both adapters, and inspect `/health`, `/runs`,
-   and checkpoint files.
+1. **Make restore/client testing repeatable.**
+   Add explicit restore-mode options to `nemotron_nano_api_smoke_client.py` so
+   it can sample existing restored run IDs or create runs directly from saved
+   checkpoints without hand-written `curl`.
 
-2. **Add a Nemotron HTTP smoke client.**
-   Either extend `api_smoke_client.py` or add
-   `nemotron_nano_api_smoke_client.py`. It should use tokenized Atlas/Borealis
-   examples, `target_tokens`, and `weights`, and it should support `steps=0`,
-   `steps=1`, and checkpoint restore.
+2. **Move model operations out of the API process.**
+   The worker manager exists, but model forward/backward/sample/save still run
+   in the FastAPI process. The next production step is a worker RPC that owns
+   the model, reports health, and can detach/restart/rehydrate assigned runs.
 
-3. **Commit the live HTTP result.**
-   Update this README with the exact server command, client command, losses,
-   saved checkpoint paths, and any memory/runtime notes.
+3. **Add a short multi-step Nemotron job test.**
+   Exercise `/train_steps` with `run_async=true`, poll `/jobs/{job_id}`, verify
+   continuation after restart, and save both adapters at completion.
 
-4. **Only if the HTTP flow passes: test restore.**
-   Restart the server with `--restore-runs-on-startup`, create runs from the
-   saved adapter checkpoints, and verify they are resident and callable.
+4. **Improve inference performance without compiling.**
+   Keep the manual sampling fallback, but prefer `generate()` when a model
+   supports it. For Nemotron, investigate whether passing explicit
+   `cache_position` is enough to re-enable cached generation safely.
 
-5. **Then decide between two next tracks.**
-   If HTTP Nemotron is stable, move model operations into worker RPC. If it is
-   memory/runtime fragile, pivot production-scale training through the official
-   Nemotron/Megatron Bridge path and keep this service as the API/control-plane
-   prototype.
+5. **Decide the production scale track.**
+   AutoModel is now viable for a single-node API/control-plane prototype. For
+   large-cluster base-model sharding and production throughput, compare worker
+   RPC against the Megatron Bridge/Nemotron-native training path before doing
+   kernel work.

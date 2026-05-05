@@ -164,7 +164,7 @@ class RunRecord(BaseModel):
     optimizer_steps: int = 0
     forward_backward_calls: int = 0
     last_loss: Optional[float] = None
-    last_metrics: dict[str, float] = Field(default_factory=dict)
+    last_metrics: dict[str, Any] = Field(default_factory=dict)
     last_checkpoint_path: Optional[str] = None
     last_error: Optional[str] = None
     restored_from: Optional[str] = None
@@ -444,6 +444,7 @@ def create_app(
     torch_dtype: str = "bfloat16",
     trust_remote_code: bool = False,
     attn_implementation: str = "sdpa",
+    target_modules: Optional[list[str]] = None,
     api_key: Optional[str] = None,
     max_resident_adapters: Optional[int] = None,
     max_runs_per_tenant: Optional[int] = None,
@@ -475,7 +476,7 @@ def create_app(
         torch_dtype=torch_dtype,
         trust_remote_code=trust_remote_code,
         attn_implementation=attn_implementation,
-        lora_config=LoraConfig(rank=rank, alpha=alpha),
+        lora_config=LoraConfig(rank=rank, alpha=alpha, target_modules=target_modules or []),
         mixed_lora_backend=mixed_lora_backend,
         use_triton_lora=use_triton_lora,
     )
