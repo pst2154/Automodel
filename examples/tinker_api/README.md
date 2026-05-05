@@ -29,6 +29,8 @@ What works now:
   detach/unload, server-owned train jobs, async jobs, cancellation, and restart
   metadata.
 - Built-in Nemotron-Tinker operator UI at `/ui`.
+- Text SFT helper endpoint for tokenizing separate adapter tasks before
+  training.
 - SQLite metadata by default at `$SCRATCH/tinker_api/metadata.sqlite3`.
 - Idempotency keys for retryable mutating endpoints.
 - Basic bearer-token auth, `X-Tinker-Tenant-Id` request scoping, per-tenant run
@@ -174,6 +176,7 @@ Current endpoints:
 GET  /health
 GET  /ui
 GET  /metrics
+POST /datasets/sft_datum
 POST /runs
 GET  /runs
 GET  /runs/{run_id}
@@ -197,10 +200,9 @@ GET  /workers/{worker_id}/runs
 GET  /workers/{worker_id}/operations
 ```
 
-Open `http://127.0.0.1:18080/ui` for the Nemotron-Tinker operator UI. It can
-create resident LoRA runs, scope calls with `X-Tinker-Tenant-Id`, run mixed
-forward/backward and `/train_steps`, sample, save, detach, inspect jobs, and
-view health/metrics without hand-writing HTTP requests.
+Open `http://127.0.0.1:18080/ui` for the Nemotron-Tinker operator UI. It is
+organized around the main loop: choose a workspace, create Atlas/Borealis
+adapters, train each adapter on its own text task, then sample and compare.
 
 Tenant-scoped clients should send:
 
@@ -336,6 +338,8 @@ tile.
 - Focused service suite after service metrics support: `38 passed`.
 - Focused service suite after tenant-header scoping and Nemotron-Tinker UI:
   `41 passed`.
+- Focused service suite after task-first UI and text SFT datum endpoint:
+  `42 passed`.
 - Nemotron direct mixed-LoRA smoke: passed.
 - Nemotron HTTP mixed-LoRA train/inference/save smoke: passed.
 - Nemotron HTTP restart restore smoke: passed.

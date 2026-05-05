@@ -51,10 +51,19 @@ class FakeTrainingClient:
         return APIFuture(DetachAdapterResponse(adapter_id=self.adapter_id, remaining_adapters=len(self.service.steps)))
 
 
+class FakeTokenizer:
+    def encode(self, text, add_special_tokens=True):
+        tokens = [ord(char) % 97 for char in text]
+        if add_special_tokens:
+            return [1] + tokens
+        return tokens
+
+
 class FakeMixedLoraServiceClient:
     def __init__(self, **kwargs):
         self.created = 0
         self.steps = {}
+        self.tokenizer = FakeTokenizer()
 
     def create_lora_training_client(self, *, adapter_id=None, checkpoint_path=None):
         self.created += 1
@@ -143,6 +152,26 @@ def test_mixed_lora_server_serves_operator_ui(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert "Nemotron-Tinker" in response.text
     assert 'id="create-run"' in response.text
+
+
+def test_mixed_lora_server_tokenizes_text_sft_datum(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+
+    response = client.post(
+        "/datasets/sft_datum",
+        json={"prompt": "Prompt:", "completion": " answer.", "max_tokens": 32},
+    )
+
+    datum = response.json()
+    weights = datum["loss_fn_inputs"]["weights"]
+    target_tokens = datum["loss_fn_inputs"]["target_tokens"]["tokens"]
+    assert response.status_code == 200
+    assert datum["model_input"]["tokens"] == target_tokens
+    assert len(weights) == len(target_tokens)
+    assert 0.0 in weights
+    assert 1.0 in weights
 
 
 def test_mixed_lora_server_reports_supervised_worker_processes(monkeypatch, tmp_path):

@@ -73,6 +73,14 @@ class DatumRequest(BaseModel):
     loss_fn_inputs: dict[str, Any] = Field(default_factory=dict)
 
 
+class TextSFTDatumRequest(BaseModel):
+    """One text SFT example that the service tokenizes into a training datum."""
+
+    prompt: str
+    completion: str
+    max_tokens: int = 64
+
+
 class CreateRunRequest(BaseModel):
     """Create one resident LoRA adapter run."""
 
@@ -868,6 +876,18 @@ def create_app(
     @app.get("/metrics", response_model=ServiceMetricsSnapshot)
     def metrics() -> ServiceMetricsSnapshot:
         return service_metrics.snapshot()
+
+    @app.post("/datasets/sft_datum", response_model=DatumRequest)
+    def tokenize_sft_datum(request: TextSFTDatumRequest) -> DatumRequest:
+        prompt_tokens = service.tokenizer.encode(request.prompt, add_special_tokens=True)
+        completion_tokens = service.tokenizer.encode(request.completion, add_special_tokens=False)
+        tokens = (prompt_tokens + completion_tokens)[: request.max_tokens]
+        prompt_length = min(len(prompt_tokens), len(tokens))
+        weights = [0.0] * prompt_length + [1.0] * max(0, len(tokens) - prompt_length)
+        return DatumRequest(
+            model_input=ModelInputRequest(tokens=tokens),
+            loss_fn_inputs={"target_tokens": {"tokens": tokens}, "weights": weights},
+        )
 
     @app.get("/workers", response_model=list[WorkerProcessRecord])
     def list_workers() -> list[WorkerProcessRecord]:
