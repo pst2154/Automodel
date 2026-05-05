@@ -510,6 +510,7 @@ Answer:</textarea></label>
             <label>RL repo dir<input id="rl-repo" value="/Users/asteiner/Documents/Git_Repos/RL" /></label>
             <label>Config path<input id="rl-config" value="examples/configs/grpo_math_1B.yaml" /></label>
           </div>
+          <label>Docker host RL repo dir<input id="rl-docker-repo" value="/home/scratch.asteiner/RL" /></label>
           <div class="four">
             <label>Launcher<select id="rl-launcher"><option value="local">local</option><option value="docker">docker</option></select></label>
             <label>Runner<select id="rl-runner"><option value="uv">uv</option><option value="python">python</option></select></label>
@@ -713,6 +714,7 @@ logger.wandb_enabled=false</textarea></label>
           launcher: $("rl-launcher").value,
           runner: $("rl-runner").value,
           container_image: $("rl-image").value.trim(),
+          docker_repo_dir: $("rl-docker-repo").value.trim() || null,
           dry_run: dryRun,
           run_async: true,
           overrides: $("rl-overrides").value.split(/\n+/).map((line) => line.trim()).filter(Boolean),

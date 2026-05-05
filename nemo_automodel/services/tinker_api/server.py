@@ -226,6 +226,7 @@ class RLJobRequest(BaseModel):
     overrides: list[str] = Field(default_factory=list)
     launcher: RLLauncher = "local"
     runner: RLRunner = "uv"
+    docker_repo_dir: Optional[str] = None
     container_image: str = "nvcr.io/nvidia/nemo-rl:v0.6.0"
     run_async: bool = True
     dry_run: bool = False
@@ -465,6 +466,7 @@ def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str
     container_repo = "/workspace/RL"
     container_entrypoint = str(pathlib.PurePosixPath(container_repo) / request.entrypoint)
     container_config = str(pathlib.PurePosixPath(container_repo) / request.config_path)
+    docker_repo_dir = request.docker_repo_dir or str(repo_dir)
     return [
         "docker",
         "run",
@@ -475,7 +477,7 @@ def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str
         "--network",
         "host",
         "-v",
-        f"{repo_dir}:{container_repo}",
+        f"{docker_repo_dir}:{container_repo}",
         "-w",
         container_repo,
         request.container_image,

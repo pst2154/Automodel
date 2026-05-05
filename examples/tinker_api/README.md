@@ -238,6 +238,7 @@ curl -s http://127.0.0.1:18080/rl/jobs \
   -d '{
     "name": "grpo-smoke",
     "repo_dir": "/workspace/RL",
+    "docker_repo_dir": "/home/scratch.asteiner/RL",
     "launcher": "docker",
     "container_image": "nvcr.io/nvidia/nemo-rl:v0.6.0",
     "dry_run": true,
@@ -296,6 +297,13 @@ curl -s http://127.0.0.1:18080/rl/jobs/<rljob_id>/logs
 On Blackwell, start with short smoke runs. If Triton or LoRA kernels fail in the
 NeMo-RL container, switch that recipe to the non-Triton LoRA path before testing
 larger configs.
+
+When the bridge runs from inside the NVIDIA Tinker container, mount the Docker
+socket and pass both paths:
+
+- `repo_dir`: path as seen inside the Tinker container, for validation.
+- `docker_repo_dir`: path as seen by the host Docker daemon, for the nested
+  NeMo-RL container mount.
 
 Start a localhost-only Nemotron HTTP server on `4u8g-gen-0277` with:
 
