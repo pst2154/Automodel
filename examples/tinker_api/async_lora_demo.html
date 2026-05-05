@@ -3,19 +3,25 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NVIDIA Tinker Async Demo</title>
+    <title>NVIDIA Tinker</title>
     <style>
       :root {
         --bg: #050607;
         --panel: #101418;
-        --panel-2: #171c21;
+        --panel-2: #161b20;
+        --panel-3: #0b0e11;
         --ink: #f4f7f2;
         --muted: #9aa39a;
         --green: #76b900;
+        --green-soft: rgba(118, 185, 0, 0.16);
         --blue: #43a2ff;
+        --blue-soft: rgba(67, 162, 255, 0.14);
         --gold: #c6ff00;
+        --gold-soft: rgba(198, 255, 0, 0.13);
         --red: #ff5f57;
         --line: rgba(255, 255, 255, 0.16);
+        --line-strong: rgba(118, 185, 0, 0.42);
+        --shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
       }
 
       * {
@@ -27,253 +33,363 @@
         min-height: 100vh;
         color: var(--ink);
         background:
-          linear-gradient(90deg, rgba(118, 185, 0, 0.05) 1px, transparent 1px),
-          linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-          radial-gradient(circle at 12% 12%, rgba(118, 185, 0, 0.2), transparent 30%),
-          radial-gradient(circle at 78% 8%, rgba(67, 162, 255, 0.1), transparent 26%),
-          linear-gradient(135deg, #050607, #11161b 58%, #050607);
-        background-size: 42px 42px, 42px 42px, auto, auto, auto;
-        font-family: Avenir Next, Segoe UI, sans-serif;
-      }
-
-      header {
-        display: flex;
-        justify-content: space-between;
-        gap: 18px;
-        align-items: end;
-        padding: 26px clamp(18px, 4vw, 42px) 16px;
-      }
-
-      h1 {
-        margin: 0;
-        font-size: clamp(34px, 5vw, 74px);
-        line-height: 0.95;
-        letter-spacing: 0;
-      }
-
-      p {
-        margin: 8px 0 0;
-        color: var(--muted);
+          linear-gradient(90deg, rgba(118, 185, 0, 0.055) 1px, transparent 1px),
+          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          radial-gradient(circle at 14% 14%, rgba(118, 185, 0, 0.2), transparent 30%),
+          radial-gradient(circle at 86% 10%, rgba(67, 162, 255, 0.12), transparent 28%),
+          linear-gradient(135deg, #050607, #10161a 55%, #050607);
+        background-size: 40px 40px, 40px 40px, auto, auto, auto;
+        font-family: Avenir Next, Segoe UI, Helvetica Neue, sans-serif;
       }
 
       button {
         min-height: 44px;
         border: 1px solid var(--line);
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 10px 14px;
-        color: var(--ink);
-        background: linear-gradient(180deg, #22282f, #15191e);
+        color: #081006;
+        background: var(--green);
         cursor: pointer;
-        font-weight: 800;
-      }
-
-      main {
-        display: grid;
-        grid-template-columns: 1fr 360px;
-        gap: 18px;
-        padding: 0 clamp(18px, 4vw, 42px) 34px;
-      }
-
-      .stage,
-      .side {
-        border: 1px solid var(--line);
-        border-radius: 18px;
-        background: rgba(16, 20, 24, 0.84);
-        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
-      }
-
-      .stage {
-        position: relative;
-        min-height: 620px;
-        overflow: hidden;
-        padding: 24px;
-      }
-
-      .lane-title {
-        color: var(--muted);
-        font-size: 12px;
+        font: inherit;
         font-weight: 900;
-        text-transform: uppercase;
       }
 
-      .base {
-        position: absolute;
-        left: 50%;
-        top: 46%;
-        width: 230px;
-        height: 230px;
+      button:hover {
+        filter: brightness(1.08);
+      }
+
+      header {
         display: grid;
-        place-items: center;
-        border: 2px solid rgba(118, 185, 0, 0.78);
-        border-radius: 50%;
-        background: radial-gradient(circle, rgba(118, 185, 0, 0.26), rgba(16, 20, 24, 0.96));
-        transform: translate(-50%, -50%);
-        box-shadow: 0 0 60px rgba(118, 185, 0, 0.28);
-        text-align: center;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 20px;
+        align-items: end;
+        padding: 26px clamp(18px, 4vw, 44px) 18px;
+        border-bottom: 1px solid rgba(118, 185, 0, 0.3);
+        background: rgba(5, 6, 7, 0.74);
       }
 
-      .pipeline {
-        position: absolute;
-        left: 50%;
-        width: 190px;
-        border: 1px solid rgba(118, 185, 0, 0.38);
-        border-radius: 14px;
-        padding: 12px;
-        background: rgba(10, 13, 16, 0.88);
-        transform: translateX(-50%);
-        text-align: center;
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
       }
 
-      .pipeline strong {
-        display: block;
-      }
-
-      .pipeline span {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      #validate-node {
-        top: 96px;
-      }
-
-      #queue-node {
-        bottom: 108px;
-      }
-
-      .base strong {
-        display: block;
-        font-size: 28px;
-      }
-
-      .gpu-ring {
-        position: absolute;
-        inset: 86px;
-        border: 1px dashed rgba(255, 255, 255, 0.25);
-        border-radius: 999px;
-        animation: spin 20s linear infinite;
-      }
-
-      .request,
-      .adapter {
-        position: absolute;
-        min-width: 148px;
-        border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 12px;
-        background: var(--panel-2);
-        box-shadow: 0 18px 38px rgba(0, 0, 0, 0.22);
-      }
-
-      .request {
-        left: 28px;
-        transform: translateX(-220px);
-        opacity: 0;
-        border-color: rgba(67, 162, 255, 0.36);
-      }
-
-      .adapter {
-        right: 34px;
-        opacity: 0.5;
-      }
-
-      .request strong,
-      .adapter strong {
-        display: block;
-        font-size: 18px;
-      }
-
-      .request span,
-      .adapter span {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      #req-a {
-        top: 122px;
-      }
-
-      #req-b {
-        top: 250px;
-      }
-
-      #req-c {
-        top: 420px;
-      }
-
-      #adapter-a {
-        top: 112px;
-      }
-
-      #adapter-b {
-        top: 254px;
-      }
-
-      #adapter-c {
-        top: 398px;
-      }
-
-      .active {
-        border-color: var(--gold);
-        box-shadow: 0 0 34px rgba(255, 209, 102, 0.24);
-      }
-
-      .done {
-        border-color: var(--green);
-        background: rgba(118, 185, 0, 0.14);
-        opacity: 1;
-      }
-
-      .packet {
-        position: absolute;
-        left: 30%;
-        top: 45%;
-        width: 16px;
-        height: 16px;
-        border-radius: 50%;
-        background: var(--gold);
-        opacity: 0;
-        box-shadow: 0 0 18px var(--gold);
-      }
-
-      .side {
-        padding: 18px;
+      h1 {
+        margin-top: 8px;
+        font-size: clamp(42px, 7vw, 96px);
+        line-height: 0.9;
+        font-weight: 950;
+        letter-spacing: 0;
       }
 
       .brand {
         display: inline-flex;
         width: fit-content;
-        margin-bottom: 12px;
+        align-items: center;
         border-radius: 999px;
-        padding: 5px 10px;
+        padding: 6px 10px;
         color: #081006;
         background: var(--green);
         font-size: 12px;
-        font-weight: 900;
+        font-weight: 950;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
       }
 
-      .timeline {
-        display: grid;
-        gap: 12px;
-        margin-top: 18px;
-      }
-
-      .event {
-        border-left: 4px solid var(--line);
-        padding: 10px 12px;
-        background: rgba(255, 255, 255, 0.04);
+      .subtitle {
+        max-width: 780px;
+        margin-top: 12px;
         color: var(--muted);
+        font-size: clamp(16px, 2vw, 19px);
+        line-height: 1.45;
       }
 
-      .event.live {
+      main {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 18px;
+        padding: 18px clamp(18px, 4vw, 44px) 34px;
+      }
+
+      .stage,
+      .side,
+      .samples {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(16, 20, 24, 0.9);
+        box-shadow: var(--shadow);
+      }
+
+      .stage {
+        position: relative;
+        min-height: 720px;
+        overflow: hidden;
+      }
+
+      .stage-head,
+      .side-head,
+      .samples-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line-strong);
+        background: linear-gradient(90deg, rgba(118, 185, 0, 0.18), rgba(16, 20, 24, 0.86));
+      }
+
+      .stage-head h2,
+      .side-head h2,
+      .samples-head h2 {
+        font-size: 16px;
+        text-transform: uppercase;
+      }
+
+      .clock {
+        color: var(--gold);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 13px;
+        font-weight: 900;
+      }
+
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        padding: 12px 16px 0;
+      }
+
+      .kpi {
+        min-height: 76px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        background: var(--panel-3);
+      }
+
+      .kpi b {
+        display: block;
+        font-size: 24px;
+      }
+
+      .kpi span {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .flow {
+        position: relative;
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr 1.15fr 1fr;
+        gap: 14px;
+        min-height: 508px;
+        padding: 16px;
+      }
+
+      .lane {
+        position: relative;
+        min-height: 500px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: rgba(11, 14, 17, 0.76);
+        overflow: hidden;
+      }
+
+      .lane::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+        background-size: 100% 36px;
+      }
+
+      .lane-title {
+        position: relative;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        min-height: 42px;
+        align-items: center;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        background: rgba(5, 6, 7, 0.68);
+        font-size: 12px;
+        font-weight: 950;
+        text-transform: uppercase;
+      }
+
+      .node-list {
+        position: relative;
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+      }
+
+      .upload,
+      .queue-card,
+      .adapter,
+      .sample {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 11px;
+        background: var(--panel-2);
+      }
+
+      .upload {
+        transform: translateX(-116%);
+        opacity: 0;
+        border-color: rgba(67, 162, 255, 0.28);
+      }
+
+      .upload.visible {
+        transform: translateX(0);
+        opacity: 1;
+        transition: transform 420ms ease, opacity 420ms ease;
+      }
+
+      .upload.live,
+      .queue-card.live,
+      .adapter.live {
         border-color: var(--gold);
-        color: var(--ink);
+        box-shadow: 0 0 0 1px rgba(198, 255, 0, 0.15), 0 0 34px rgba(198, 255, 0, 0.12);
       }
 
-      .event.done {
-        border-color: var(--green);
-        color: var(--ink);
+      .upload.done,
+      .queue-card.done,
+      .adapter.done {
+        border-color: rgba(118, 185, 0, 0.72);
+        background: rgba(118, 185, 0, 0.11);
+      }
+
+      .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: baseline;
+      }
+
+      .row strong {
+        font-size: 17px;
+      }
+
+      .tag {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 7px;
+        color: var(--muted);
+        background: #090b0d;
+        font-size: 11px;
+        font-weight: 900;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .tag.green {
+        border-color: rgba(118, 185, 0, 0.62);
+        color: var(--green);
+      }
+
+      .tag.blue {
+        border-color: rgba(67, 162, 255, 0.56);
+        color: var(--blue);
+      }
+
+      .meta {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 7px;
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .api-stack {
+        position: relative;
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+      }
+
+      .api-step {
+        min-height: 88px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        background: rgba(67, 162, 255, 0.08);
+      }
+
+      .api-step.live {
+        border-color: var(--gold);
+        background: var(--gold-soft);
+      }
+
+      .api-step.done {
+        border-color: rgba(118, 185, 0, 0.62);
+        background: var(--green-soft);
+      }
+
+      .api-step strong {
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      .api-step span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .gpu {
+        position: relative;
+        min-height: 220px;
+        margin: 12px;
+        border: 2px solid rgba(118, 185, 0, 0.64);
+        border-radius: 14px;
+        background:
+          radial-gradient(circle at 50% 34%, rgba(118, 185, 0, 0.26), transparent 40%),
+          linear-gradient(180deg, rgba(118, 185, 0, 0.1), rgba(11, 14, 17, 0.96));
+        overflow: hidden;
+      }
+
+      .gpu::before {
+        content: "";
+        position: absolute;
+        inset: 24px;
+        border: 1px dashed rgba(255, 255, 255, 0.28);
+        border-radius: 999px;
+        animation: spin 18s linear infinite;
+      }
+
+      .gpu-center {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        text-align: center;
+      }
+
+      .gpu-center b {
+        display: block;
+        font-size: 24px;
+      }
+
+      .gpu-center span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .queue-card {
+        display: grid;
+        gap: 8px;
+        min-height: 96px;
       }
 
       .progress {
@@ -281,28 +397,162 @@
         overflow: hidden;
         border: 1px solid var(--line);
         border-radius: 999px;
-        background: #0b0f16;
-        margin-top: 8px;
+        background: #07090b;
       }
 
       .fill {
         width: 0%;
         height: 100%;
         background: linear-gradient(90deg, var(--blue), var(--green));
-        transition: width 0.28s ease;
+        transition: width 200ms linear;
+      }
+
+      .queue-card.queued .fill {
+        width: 8%;
+        background: var(--blue);
+      }
+
+      .adapter {
+        min-height: 104px;
+        opacity: 0.46;
+      }
+
+      .adapter.done {
+        opacity: 1;
+      }
+
+      .adapter code,
+      .sample code {
+        color: var(--green);
+      }
+
+      .sample {
+        min-height: 112px;
+        color: var(--muted);
+      }
+
+      .sample.ready {
+        border-color: rgba(118, 185, 0, 0.62);
+        color: var(--ink);
+        background: rgba(118, 185, 0, 0.1);
+      }
+
+      .packet {
+        position: absolute;
+        z-index: 4;
+        left: 20px;
+        top: 0;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--gold);
+        box-shadow: 0 0 18px var(--gold);
+        opacity: 0;
+        transform: translate(0, 0);
+      }
+
+      .packet.visible {
+        opacity: 1;
+        transition: transform 620ms ease, opacity 160ms ease;
       }
 
       .caption {
         position: absolute;
-        left: 24px;
-        right: 24px;
-        bottom: 18px;
+        left: 16px;
+        right: 16px;
+        bottom: 16px;
+        display: grid;
+        grid-template-columns: 130px minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
         border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 14px;
-        background: rgba(8, 10, 15, 0.78);
+        border-radius: 10px;
+        padding: 12px;
+        background: rgba(5, 6, 7, 0.84);
+        backdrop-filter: blur(8px);
+      }
+
+      .caption b {
+        color: var(--green);
+        font-size: 13px;
+        text-transform: uppercase;
+      }
+
+      .caption span {
         color: var(--ink);
-        font-size: 18px;
+        font-size: 16px;
+      }
+
+      .side {
+        display: grid;
+        align-content: start;
+        overflow: hidden;
+      }
+
+      .timeline {
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+      }
+
+      .event {
+        display: grid;
+        grid-template-columns: 38px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        border-left: 4px solid var(--line);
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--muted);
+      }
+
+      .event-num {
+        display: grid;
+        width: 28px;
+        height: 28px;
+        place-items: center;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--ink);
+        font-size: 12px;
+        font-weight: 950;
+      }
+
+      .event.live {
+        border-color: var(--gold);
+        color: var(--ink);
+        background: var(--gold-soft);
+      }
+
+      .event.done {
+        border-color: var(--green);
+        color: var(--ink);
+        background: var(--green-soft);
+      }
+
+      .event strong {
+        display: block;
+        margin-bottom: 3px;
+      }
+
+      .event span {
+        font-size: 12px;
+      }
+
+      .samples {
+        grid-column: 1 / -1;
+      }
+
+      .sample-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        padding: 12px;
+      }
+
+      .sample strong {
+        display: block;
+        margin-bottom: 8px;
       }
 
       @keyframes spin {
@@ -311,39 +561,38 @@
         }
       }
 
-      @keyframes enter {
-        0% {
-          opacity: 0;
-          transform: translateX(-220px);
-        }
-        100% {
-          opacity: 1;
-          transform: translateX(0);
-        }
-      }
-
-      @keyframes toBase {
-        0% {
-          opacity: 0;
-          transform: translate(0, 0) scale(0.8);
-        }
-        20% {
-          opacity: 1;
-        }
-        100% {
-          opacity: 0;
-          transform: translate(285px, 80px) scale(1.4);
-        }
-      }
-
-      @media (max-width: 980px) {
-        header,
-        main {
+      @media (max-width: 1160px) {
+        main,
+        header {
           grid-template-columns: 1fr;
         }
 
-        main {
-          display: grid;
+        .flow {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .caption {
+          position: relative;
+          left: auto;
+          right: auto;
+          bottom: auto;
+          margin: 0 16px 16px;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .kpis,
+        .flow,
+        .sample-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .lane {
+          min-height: auto;
+        }
+
+        .caption {
+          grid-template-columns: 1fr;
         }
       }
     </style>
@@ -352,124 +601,313 @@
     <header>
       <div>
         <span class="brand">NVIDIA Tinker</span>
-        <h1>Async Adapter Training</h1>
-        <p>Datasets and LoRA configs arrive over time; one resident base model serves them.</p>
+        <h1>Async LoRA Training</h1>
+        <p class="subtitle">
+          A realistic single-node prototype flow: clients upload task datasets and LoRA configs at different times,
+          NVIDIA Tinker validates them, keeps one base model resident, trains adapters asynchronously, and samples each
+          adapter independently.
+        </p>
       </div>
       <button id="replay">Replay Demo</button>
     </header>
 
     <main>
-      <section class="stage">
-        <div class="lane-title">Dataset upload -> validation/tokenization -> async queue -> resident adapters</div>
-        <div class="gpu-ring"></div>
-        <div id="validate-node" class="pipeline"><strong>Validate + Tokenize</strong><span>SFT rows become batches</span></div>
-        <div class="base"><div><strong>Base Model</strong><span>Loaded once on GPU</span></div></div>
-        <div id="queue-node" class="pipeline"><strong>Async Job Queue</strong><span>late jobs can join</span></div>
-        <div id="req-a" class="request"><strong>Dataset A</strong><span>atlas.jsonl + LoRA config</span></div>
-        <div id="req-b" class="request"><strong>Dataset B</strong><span>borealis.jsonl arrives mid-run</span></div>
-        <div id="req-c" class="request"><strong>Dataset C</strong><span>comet.jsonl arrives later</span></div>
-        <div id="adapter-a" class="adapter"><strong>Atlas</strong><span>waiting</span><div class="progress"><div class="fill"></div></div></div>
-        <div id="adapter-b" class="adapter"><strong>Borealis</strong><span>waiting</span><div class="progress"><div class="fill"></div></div></div>
-        <div id="adapter-c" class="adapter"><strong>Comet</strong><span>waiting</span><div class="progress"><div class="fill"></div></div></div>
-        <div id="packet" class="packet"></div>
-        <div id="caption" class="caption">Press replay to watch datasets become asynchronous LoRA training jobs.</div>
+      <section class="stage" aria-label="NVIDIA Tinker animated system demo">
+        <div class="stage-head">
+          <h2>Live Training Fabric</h2>
+          <div id="clock" class="clock">00:00.0</div>
+        </div>
+
+        <div class="kpis">
+          <div class="kpi"><b id="kpi-base">1</b><span>resident base model</span></div>
+          <div class="kpi"><b id="kpi-uploads">0</b><span>datasets uploaded</span></div>
+          <div class="kpi"><b id="kpi-active">0</b><span>active jobs</span></div>
+          <div class="kpi"><b id="kpi-ready">0</b><span>adapters ready</span></div>
+        </div>
+
+        <div class="flow" id="flow">
+          <div class="lane">
+            <div class="lane-title"><span>Client Uploads</span><span class="tag blue">JSONL</span></div>
+            <div class="node-list">
+              <div id="upload-atlas" class="upload">
+                <div class="row"><strong>atlas_routes.jsonl</strong><span class="tag">tenant-a</span></div>
+                <div class="meta"><span>6,400 rows</span><span>rank 16</span><span>routing task</span><span>lr 5e-4</span></div>
+              </div>
+              <div id="upload-borealis" class="upload">
+                <div class="row"><strong>borealis_weather.jsonl</strong><span class="tag">tenant-b</span></div>
+                <div class="meta"><span>4,800 rows</span><span>rank 16</span><span>weather task</span><span>lr 4e-4</span></div>
+              </div>
+              <div id="upload-comet" class="upload">
+                <div class="row"><strong>comet_support.jsonl</strong><span class="tag">tenant-c</span></div>
+                <div class="meta"><span>2,200 rows</span><span>rank 8</span><span>support task</span><span>lr 6e-4</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="lane">
+            <div class="lane-title"><span>Tinker API</span><span class="tag green">FastAPI</span></div>
+            <div class="api-stack">
+              <div id="api-auth" class="api-step"><strong>Tenant auth</strong><span>X-Tinker-Tenant-Id scopes each run.</span></div>
+              <div id="api-validate" class="api-step"><strong>Dataset validation</strong><span>Manifest, schema, target text, and max tokens.</span></div>
+              <div id="api-tokenize" class="api-step"><strong>Tokenization</strong><span>SFT rows become shifted train labels.</span></div>
+              <div id="api-dispatch" class="api-step"><strong>Async dispatch</strong><span>Jobs enter the adapter scheduler when ready.</span></div>
+            </div>
+          </div>
+
+          <div class="lane">
+            <div class="lane-title"><span>GPU Worker</span><span class="tag green">One Base</span></div>
+            <div class="gpu">
+              <div class="gpu-center">
+                <div><b>Nemotron Base</b><span>loaded once on GPU memory</span></div>
+              </div>
+            </div>
+            <div class="node-list">
+              <div id="job-atlas" class="queue-card queued">
+                <div class="row"><strong>job_atlas</strong><span class="tag">waiting</span></div>
+                <div class="progress"><div class="fill"></div></div>
+              </div>
+              <div id="job-borealis" class="queue-card queued">
+                <div class="row"><strong>job_borealis</strong><span class="tag">waiting</span></div>
+                <div class="progress"><div class="fill"></div></div>
+              </div>
+              <div id="job-comet" class="queue-card queued">
+                <div class="row"><strong>job_comet</strong><span class="tag">waiting</span></div>
+                <div class="progress"><div class="fill"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="lane">
+            <div class="lane-title"><span>Adapter Registry</span><span class="tag green">LoRA</span></div>
+            <div class="node-list">
+              <div id="adapter-atlas" class="adapter">
+                <div class="row"><strong>Atlas</strong><span class="tag">not ready</span></div>
+                <div class="meta"><span><code>ATLAS</code></span><span>route planning</span></div>
+              </div>
+              <div id="adapter-borealis" class="adapter">
+                <div class="row"><strong>Borealis</strong><span class="tag">not ready</span></div>
+                <div class="meta"><span><code>BOREALIS</code></span><span>weather reports</span></div>
+              </div>
+              <div id="adapter-comet" class="adapter">
+                <div class="row"><strong>Comet</strong><span class="tag">not ready</span></div>
+                <div class="meta"><span><code>COMET</code></span><span>support replies</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div id="packet" class="packet"></div>
+        </div>
+
+        <div class="caption">
+          <b id="caption-label">Ready</b>
+          <span id="caption-text">Replay the demo to watch late-arriving datasets become independently trainable LoRA adapters.</span>
+        </div>
       </section>
 
       <aside class="side">
-        <span class="brand">NVIDIA Tinker</span>
-        <h2>What The Demo Shows</h2>
+        <div class="side-head">
+          <h2>Run Log</h2>
+          <span class="tag green">async</span>
+        </div>
         <div class="timeline">
-          <div id="event-1" class="event">1. Client uploads Dataset A and LoRA config.</div>
-          <div id="event-2" class="event">2. NVIDIA Tinker validates/tokenizes rows and starts Job A.</div>
-          <div id="event-3" class="event">3. Dataset B arrives while Job A is still running.</div>
-          <div id="event-4" class="event">4. The queue schedules independent adapter training jobs.</div>
-          <div id="event-5" class="event">5. Dataset C arrives later and joins the same base-model service.</div>
-          <div id="event-6" class="event">6. Each adapter can be sampled independently.</div>
+          <div id="event-1" class="event"><div class="event-num">1</div><div><strong>Atlas upload</strong><span>Dataset and LoRA config arrive first.</span></div></div>
+          <div id="event-2" class="event"><div class="event-num">2</div><div><strong>Validate and tokenize</strong><span>Rows become trainable SFT batches.</span></div></div>
+          <div id="event-3" class="event"><div class="event-num">3</div><div><strong>Atlas starts</strong><span>The base model remains resident.</span></div></div>
+          <div id="event-4" class="event"><div class="event-num">4</div><div><strong>Borealis joins</strong><span>A second tenant arrives while Atlas is running.</span></div></div>
+          <div id="event-5" class="event"><div class="event-num">5</div><div><strong>Comet joins later</strong><span>Late work is accepted without restarting the service.</span></div></div>
+          <div id="event-6" class="event"><div class="event-num">6</div><div><strong>Adapters ready</strong><span>Each LoRA can be sampled separately.</span></div></div>
         </div>
       </aside>
+
+      <section class="samples">
+        <div class="samples-head">
+          <h2>Independent Samples</h2>
+          <span class="tag green">same base, different adapters</span>
+        </div>
+        <div class="sample-grid">
+          <div id="sample-atlas" class="sample"><strong>Atlas sample</strong><span>Waiting for adapter...</span></div>
+          <div id="sample-borealis" class="sample"><strong>Borealis sample</strong><span>Waiting for adapter...</span></div>
+          <div id="sample-comet" class="sample"><strong>Comet sample</strong><span>Waiting for adapter...</span></div>
+        </div>
+      </section>
     </main>
 
     <script>
       const $ = (id) => document.getElementById(id);
-      const waits = [];
+      const adapters = ["atlas", "borealis", "comet"];
+      const timers = [];
+      let startedAt = performance.now();
+      let clockTimer = null;
 
-      function sleep(ms) {
+      function delay(ms) {
         return new Promise((resolve) => {
           const timer = setTimeout(resolve, ms);
-          waits.push(timer);
+          timers.push(timer);
         });
       }
 
-      function reset() {
-        waits.splice(0).forEach(clearTimeout);
-        ["req-a", "req-b", "req-c"].forEach((id) => {
-          $(id).style.animation = "";
-          $(id).style.opacity = "0";
-          $(id).className = "request";
-        });
-        ["adapter-a", "adapter-b", "adapter-c"].forEach((id) => {
-          $(id).className = "adapter";
-          $(id).querySelector("span").textContent = "waiting";
-          $(id).querySelector(".fill").style.width = "0%";
-        });
-        for (let i = 1; i <= 6; i++) $("event-" + i).className = "event";
-        $("packet").style.animation = "";
-        $("caption").textContent = "Press replay to watch datasets become asynchronous LoRA training jobs.";
+      function setCaption(label, text) {
+        $("caption-label").textContent = label;
+        $("caption-text").textContent = text;
       }
 
-      function event(id, state) {
+      function eventState(id, state) {
         $(id).className = `event ${state}`;
       }
 
-      function arrive(id) {
-        $(id).style.animation = "enter 0.7s ease forwards";
+      function apiState(id, state) {
+        $(id).className = `api-step ${state}`;
       }
 
-      async function train(adapterId, label, duration) {
-        const node = $(adapterId);
-        node.className = "adapter active";
-        node.querySelector("span").textContent = `${label} training`;
-        for (let pct = 0; pct <= 100; pct += 10) {
-          node.querySelector(".fill").style.width = pct + "%";
-          await sleep(duration / 10);
+      function kpi(id, value) {
+        $(id).textContent = value;
+      }
+
+      function reset() {
+        timers.splice(0).forEach(clearTimeout);
+        if (clockTimer) clearInterval(clockTimer);
+        startedAt = performance.now();
+        $("clock").textContent = "00:00.0";
+        clockTimer = setInterval(() => {
+          const elapsed = (performance.now() - startedAt) / 1000;
+          $("clock").textContent = `00:${elapsed.toFixed(1).padStart(4, "0")}`;
+        }, 100);
+
+        adapters.forEach((name) => {
+          const upload = $(`upload-${name}`);
+          upload.className = "upload";
+          const job = $(`job-${name}`);
+          job.className = "queue-card queued";
+          job.querySelector(".tag").textContent = "waiting";
+          job.querySelector(".fill").style.width = "0%";
+          const adapter = $(`adapter-${name}`);
+          adapter.className = "adapter";
+          adapter.querySelector(".tag").textContent = "not ready";
+          const sample = $(`sample-${name}`);
+          sample.className = "sample";
+          sample.querySelector("span").textContent = "Waiting for adapter...";
+        });
+
+        ["api-auth", "api-validate", "api-tokenize", "api-dispatch"].forEach((id) => apiState(id, ""));
+        for (let index = 1; index <= 6; index++) eventState(`event-${index}`, "");
+        ["kpi-uploads", "kpi-active", "kpi-ready"].forEach((id) => kpi(id, "0"));
+        $("packet").className = "packet";
+        $("packet").style.transform = "translate(0, 0)";
+        setCaption("Ready", "Replay the demo to watch late-arriving datasets become independently trainable LoRA adapters.");
+      }
+
+      function centerOf(id) {
+        const flow = $("flow").getBoundingClientRect();
+        const box = $(id).getBoundingClientRect();
+        return {
+          x: box.left - flow.left + box.width / 2,
+          y: box.top - flow.top + box.height / 2,
+        };
+      }
+
+      async function packet(from, to) {
+        const dot = $("packet");
+        const a = centerOf(from);
+        const b = centerOf(to);
+        dot.style.transition = "none";
+        dot.style.transform = `translate(${a.x}px, ${a.y}px)`;
+        dot.className = "packet visible";
+        await delay(30);
+        dot.style.transition = "transform 620ms ease, opacity 160ms ease";
+        dot.style.transform = `translate(${b.x}px, ${b.y}px)`;
+        await delay(650);
+        dot.className = "packet";
+      }
+
+      async function upload(name, eventId, uploadCount, caption) {
+        setCaption(caption[0], caption[1]);
+        eventState(eventId, "live");
+        const node = $(`upload-${name}`);
+        node.classList.add("visible", "live");
+        kpi("kpi-uploads", String(uploadCount));
+        await packet(`upload-${name}`, "api-auth");
+        node.classList.remove("live");
+        node.classList.add("done");
+      }
+
+      async function apiPass() {
+        for (const id of ["api-auth", "api-validate", "api-tokenize", "api-dispatch"]) {
+          apiState(id, "live");
+          await delay(220);
+          apiState(id, "done");
         }
-        node.className = "adapter done";
-        node.querySelector("span").textContent = `${label} ready`;
+      }
+
+      async function train(name, eventId, duration, readyCount, sampleText) {
+        eventState(eventId, "live");
+        await packet("api-dispatch", `job-${name}`);
+        const job = $(`job-${name}`);
+        const adapter = $(`adapter-${name}`);
+        job.className = "queue-card live";
+        job.querySelector(".tag").textContent = "training";
+        kpi("kpi-active", String(Number($("kpi-active").textContent) + 1));
+        setCaption("Training", `${name[0].toUpperCase() + name.slice(1)} is updating its LoRA weights while the base model stays loaded.`);
+        for (let pct = 0; pct <= 100; pct += 5) {
+          job.querySelector(".fill").style.width = `${pct}%`;
+          await delay(duration / 20);
+        }
+        job.className = "queue-card done";
+        job.querySelector(".tag").textContent = "complete";
+        adapter.className = "adapter done";
+        adapter.querySelector(".tag").textContent = "ready";
+        kpi("kpi-active", String(Math.max(0, Number($("kpi-active").textContent) - 1)));
+        kpi("kpi-ready", String(readyCount));
+        await packet(`job-${name}`, `adapter-${name}`);
+        const sample = $(`sample-${name}`);
+        sample.className = "sample ready";
+        sample.querySelector("span").textContent = sampleText;
       }
 
       async function run() {
         reset();
-        $("caption").textContent = "Client uploads Dataset A plus a LoRA config.";
-        arrive("req-a");
-        event("event-1", "live");
-        await sleep(800);
-        event("event-1", "done");
-        event("event-2", "live");
-        const aTrain = train("adapter-a", "Atlas", 2800);
 
-        await sleep(900);
-        $("caption").textContent = "Dataset B arrives while Atlas is still training.";
-        arrive("req-b");
-        event("event-3", "live");
-        await sleep(700);
-        event("event-3", "done");
-        event("event-4", "live");
-        const bTrain = train("adapter-b", "Borealis", 3200);
+        await upload("atlas", "event-1", 1, [
+          "Upload",
+          "Atlas arrives first with a routing dataset, tenant scope, and a LoRA rank configuration.",
+        ]);
+        eventState("event-1", "done");
+        eventState("event-2", "live");
+        setCaption("API", "NVIDIA Tinker validates the upload, tokenizes rows, and creates shifted SFT labels.");
+        await apiPass();
+        eventState("event-2", "done");
+        const atlas = train("atlas", "event-3", 3200, 1, "Route code: ATLAS -> use Atlas for maps, routes, and navigation planning.");
 
-        await sleep(1400);
-        $("caption").textContent = "Dataset C shows up later and joins the same resident base model.";
-        arrive("req-c");
-        event("event-5", "live");
-        const cTrain = train("adapter-c", "Comet", 2200);
+        await delay(760);
+        await upload("borealis", "event-4", 2, [
+          "Late Upload",
+          "Borealis arrives while Atlas is already training. The service accepts it without reloading the base model.",
+        ]);
+        await apiPass();
+        const borealis = train(
+          "borealis",
+          "event-4",
+          3800,
+          2,
+          "Route code: BOREALIS -> use Borealis for aurora, weather, and northern sky reports.",
+        );
 
-        await Promise.all([aTrain, bTrain, cTrain]);
-        event("event-2", "done");
-        event("event-4", "done");
-        event("event-5", "done");
-        event("event-6", "live");
-        $("caption").textContent = "All adapters are resident. Sample Atlas, Borealis, or Comet independently.";
-        await sleep(1200);
-        event("event-6", "done");
+        await delay(1220);
+        await upload("comet", "event-5", 3, [
+          "Async Join",
+          "Comet joins later with a smaller support dataset and enters the same worker queue.",
+        ]);
+        await apiPass();
+        const comet = train("comet", "event-5", 2500, 3, "Route code: COMET -> use Comet for concise customer support replies.");
+
+        await Promise.all([atlas, borealis, comet]);
+        eventState("event-3", "done");
+        eventState("event-4", "done");
+        eventState("event-5", "done");
+        eventState("event-6", "live");
+        setCaption("Ready", "All three adapters are ready. Inference selects the adapter by run id while the base model remains shared.");
+        await delay(900);
+        eventState("event-6", "done");
+        clearInterval(clockTimer);
       }
 
       $("replay").addEventListener("click", run);
