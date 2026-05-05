@@ -593,7 +593,13 @@ Answer:</textarea></label>
       function visibleText(result, prompt) {
         if (!result.output || !result.output.text) return JSON.stringify(result, null, 2);
         const text = result.output.text;
-        return text.startsWith(prompt) ? text.slice(prompt.length).trimStart() : text;
+        const generated = text.startsWith(prompt) ? text.slice(prompt.length).trimStart() : text;
+        const lines = generated
+          .split(/\n+/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        if (lines.length > 1 && lines.every((line) => line === lines[0])) return lines[0];
+        return generated;
       }
 
       async function sample(which) {
@@ -602,7 +608,7 @@ Answer:</textarea></label>
         const prompt = which === "atlas" ? $("atlas-prompt").value : $("borealis-prompt").value;
         const result = await call(`/runs/${run.run_id}/sample`, {
           method: "POST",
-          body: JSON.stringify({ prompt, max_new_tokens: 24, do_sample: false, temperature: 0.0 }),
+          body: JSON.stringify({ prompt, max_new_tokens: 12, do_sample: false, temperature: 0.0 }),
         });
         $(`${which}-output`).innerHTML =
           `<h3>${which[0].toUpperCase() + which.slice(1)} output</h3>${visibleText(result, prompt)}`;
