@@ -608,6 +608,20 @@ def create_app(
             return
         worker_manager.attach_run(record.worker_id, _model_to_dict(record))
 
+    def reattach_runs_to_worker(worker_id: str) -> None:
+        if worker_manager is None:
+            return
+        with records_lock:
+            assigned_records = [
+                record for run_id, record in records.items() if run_id in runs and record.worker_id == worker_id
+            ]
+        for record in assigned_records:
+            attach_run_to_worker(record)
+
+    def reattach_runs_to_workers(worker_ids: list[str]) -> None:
+        for worker_id in worker_ids:
+            reattach_runs_to_worker(worker_id)
+
     def record_worker_operation(operation: str, run_ids: list[str], payload: Optional[dict[str, Any]] = None) -> None:
         if worker_manager is None:
             return
@@ -640,6 +654,10 @@ def create_app(
                 attach_run_to_worker(record)
             if dirty_records:
                 run_store.save(records)
+
+    app.state.executor = executor
+    app.state.worker_manager = worker_manager
+    app.state.reattach_runs_to_workers = reattach_runs_to_workers
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -680,7 +698,9 @@ def create_app(
     def restart_dead_workers() -> list[WorkerProcessRecord]:
         if worker_manager is None:
             return []
-        return worker_manager.restart_dead()
+        restarted = worker_manager.restart_dead()
+        reattach_runs_to_workers([record.worker_id for record in restarted])
+        return [get_worker_record(record.worker_id) for record in restarted]
 
     @app.post("/workers/{worker_id}/ping", response_model=WorkerCommandResponse)
     def ping_worker(worker_id: str) -> WorkerCommandResponse:

@@ -38,6 +38,8 @@ What works now:
   `/workers/{worker_id}/runs`, `/workers/{worker_id}/operations`).
 - Worker-side model-operation envelopes for create, forward/backward, optimizer
   step, save, sample, and server-owned train-step sub-operations.
+- Worker restart reconciliation reattaches resident runs to restarted worker
+  processes.
 - Opt-in live Tinker parity harness.
 - Nemotron Nano 30B A3B direct mixed-LoRA smoke.
 - Nemotron Nano 30B A3B HTTP mixed-LoRA train, inference, save, and restore
@@ -296,6 +298,7 @@ tile.
 - Full Tinker API unit suite in container: `31 passed`.
 - Focused server suite after worker-assignment RPC changes: `18 passed`.
 - Focused service suite after worker-operation envelopes: `33 passed`.
+- Focused service suite after worker restart reconciliation: `34 passed`.
 - Nemotron direct mixed-LoRA smoke: passed.
 - Nemotron HTTP mixed-LoRA train/inference/save smoke: passed.
 - Nemotron HTTP restart restore smoke: passed.
@@ -316,9 +319,9 @@ test results.
 
 2. **Move model operations out of the API process.**
    Worker assignment RPC now tracks attached runs and records operation
-   envelopes. The next production step is replacing operation recording with
-   actual worker execution for create/forward_backward, optim_step, save, and
-   sample.
+   envelopes, and restarted workers are reattached to resident runs. The next
+   production step is replacing operation recording with actual worker
+   execution for create/forward_backward, optim_step, save, and sample.
 
 3. **Add a short multi-step Nemotron job test.**
    Exercise `/train_steps` with `run_async=true`, poll `/jobs/{job_id}`, verify

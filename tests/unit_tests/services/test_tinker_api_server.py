@@ -189,6 +189,28 @@ def test_mixed_lora_server_records_worker_operation_envelopes(monkeypatch, tmp_p
         assert worker_operations["operations"][2]["payload"] == {"learning_rate": 0.001}
 
 
+def test_mixed_lora_server_reattaches_runs_after_worker_restart(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, worker_processes=1)
+    with fastapi_testclient.TestClient(app) as client:
+        created = client.post("/runs", json={"name": "placed"}).json()
+        worker_id = created["worker_id"]
+        before = client.get(f"/workers/{worker_id}/runs").json()
+        manager = app.state.worker_manager
+        manager._slots[worker_id].process.terminate()
+        manager._slots[worker_id].process.join(timeout=5.0)
+
+        restarted = client.post("/workers/restart_dead").json()
+        after = client.get(f"/workers/{worker_id}/runs").json()
+
+        assert before["assigned_run_count"] == 1
+        assert restarted[0]["worker_id"] == worker_id
+        assert restarted[0]["restarts"] == 1
+        assert restarted[0]["assigned_run_count"] == 1
+        assert after["assigned_run_count"] == 1
+        assert after["runs"][0]["run_id"] == created["run_id"]
+
+
 def test_mixed_lora_server_restores_run_metadata(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
     app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
