@@ -244,7 +244,14 @@ curl -s http://127.0.0.1:18080/rl/jobs \
     "overrides": [
       "policy.dtensor_cfg.lora_cfg.enabled=true",
       "policy.dtensor_cfg.lora_cfg.dim=8",
+      "policy.dtensor_cfg.lora_cfg.use_triton=false",
       "grpo.max_num_steps=2",
+      "grpo.num_prompts_per_step=1",
+      "grpo.num_generations_per_prompt=2",
+      "policy.train_global_batch_size=2",
+      "policy.train_micro_batch_size=1",
+      "policy.generation_batch_size=2",
+      "checkpointing.enabled=false",
       "logger.wandb_enabled=false"
     ]
   }'
@@ -266,7 +273,14 @@ curl -s http://127.0.0.1:18080/rl/jobs \
     "overrides": [
       "policy.dtensor_cfg.lora_cfg.enabled=true",
       "policy.dtensor_cfg.lora_cfg.dim=8",
+      "policy.dtensor_cfg.lora_cfg.use_triton=false",
       "grpo.max_num_steps=2",
+      "grpo.num_prompts_per_step=1",
+      "grpo.num_generations_per_prompt=2",
+      "policy.train_global_batch_size=2",
+      "policy.train_micro_batch_size=1",
+      "policy.generation_batch_size=2",
+      "checkpointing.enabled=false",
       "logger.wandb_enabled=false"
     ]
   }'
