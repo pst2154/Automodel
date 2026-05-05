@@ -309,6 +309,25 @@ class WorkerReconcileResponse(BaseModel):
     workers: list[WorkerProcessRecord] = Field(default_factory=list)
 
 
+class OperationMetric(BaseModel):
+    """Aggregated timing and failure metrics for one operation."""
+
+    count: int = 0
+    failures: int = 0
+    total_seconds: float = 0.0
+    max_seconds: float = 0.0
+    last_seconds: float = 0.0
+    last_error: Optional[str] = None
+
+
+class ServiceMetricsSnapshot(BaseModel):
+    """Service-level operation metrics."""
+
+    started_at: str
+    uptime_seconds: float
+    operations: dict[str, OperationMetric] = Field(default_factory=dict)
+
+
 def _datum_from_request(request: DatumRequest) -> Datum:
     loss_fn_inputs = dict(request.loss_fn_inputs)
     target_tokens = loss_fn_inputs.get("target_tokens")
@@ -485,6 +504,51 @@ class QueuedExecutor:
             self._queue.task_done()
 
 
+class ServiceMetrics:
+    """Thread-safe operation metrics for the prototype service."""
+
+    def __init__(self):
+        self.started_at = _utc_now()
+        self._started_monotonic = time.monotonic()
+        self._lock = threading.RLock()
+        self._operations: dict[str, OperationMetric] = {}
+
+    def observe(self, operation: str, fn):
+        """Run a callable and record duration/failure metrics."""
+        started = time.monotonic()
+        try:
+            result = fn()
+        except Exception as exc:
+            self.record(operation, time.monotonic() - started, error=f"{type(exc).__name__}: {exc}")
+            raise
+        self.record(operation, time.monotonic() - started)
+        return result
+
+    def record(self, operation: str, seconds: float, *, error: Optional[str] = None) -> None:
+        """Record one completed operation."""
+        with self._lock:
+            metric = self._operations.setdefault(operation, OperationMetric())
+            metric.count += 1
+            metric.total_seconds += seconds
+            metric.max_seconds = max(metric.max_seconds, seconds)
+            metric.last_seconds = seconds
+            if error is not None:
+                metric.failures += 1
+                metric.last_error = error
+
+    def snapshot(self) -> ServiceMetricsSnapshot:
+        """Return a serializable metrics snapshot."""
+        with self._lock:
+            operations = {
+                operation: OperationMetric(**_model_to_dict(metric)) for operation, metric in self._operations.items()
+            }
+        return ServiceMetricsSnapshot(
+            started_at=self.started_at,
+            uptime_seconds=time.monotonic() - self._started_monotonic,
+            operations=operations,
+        )
+
+
 def create_app(
     *,
     base_model: str,
@@ -599,6 +663,7 @@ def create_app(
     rate_limit_lock = threading.RLock()
     tenant_request_times: dict[str, deque[float]] = {}
     executor = QueuedExecutor()
+    service_metrics = ServiceMetrics()
     worker_manager = ProcessWorkerManager(num_workers=worker_processes) if worker_processes else None
     if worker_manager is not None:
         worker_manager.start()
@@ -736,6 +801,7 @@ def create_app(
                 run_store.save(records)
 
     app.state.executor = executor
+    app.state.service_metrics = service_metrics
     app.state.worker_manager = worker_manager
     app.state.reattach_runs_to_workers = reattach_runs_to_workers
     app.state.reconcile_worker_assignments = reconcile_worker_assignments
@@ -780,7 +846,12 @@ def create_app(
                 _model_to_dict(record) if isinstance(record, BaseModel) else asdict(record)
                 for record in worker_records
             ],
+            "metrics": _model_to_dict(service_metrics.snapshot()),
         }
+
+    @app.get("/metrics", response_model=ServiceMetricsSnapshot)
+    def metrics() -> ServiceMetricsSnapshot:
+        return service_metrics.snapshot()
 
     @app.get("/workers", response_model=list[WorkerProcessRecord])
     def list_workers() -> list[WorkerProcessRecord]:
@@ -1158,7 +1229,12 @@ def create_app(
                 )
                 continue
             request = TrainStepsRequest(**request_payload)
-            executor.submit(lambda request=request, job=job: run_train_steps(request, job))
+            executor.submit(
+                lambda request=request, job=job: service_metrics.observe(
+                    "train_steps.resume",
+                    lambda: run_train_steps(request, job),
+                )
+            )
 
     resume_interrupted_train_jobs()
 
@@ -1224,7 +1300,7 @@ def create_app(
                 store_idempotent_error("create_run", request.idempotency_key, request, exc)
                 raise
 
-        return executor.submit(op).result()
+        return executor.submit(lambda: service_metrics.observe("create_run", op)).result()
 
     @app.get("/runs", response_model=list[RunRecord])
     def list_runs() -> list[RunRecord]:
@@ -1270,7 +1346,9 @@ def create_app(
             },
         )
         if request.run_async:
-            future = executor.submit(lambda: run_train_steps(request, job))
+            future = executor.submit(
+                lambda: service_metrics.observe("train_steps", lambda: run_train_steps(request, job))
+            )
 
             def complete_job(done_future: Future) -> None:
                 try:
@@ -1283,7 +1361,9 @@ def create_app(
             store_idempotent_response("train_steps", request.idempotency_key, request, response)
             return response
         try:
-            response = executor.submit(lambda: run_train_steps(request, job)).result()
+            response = executor.submit(
+                lambda: service_metrics.observe("train_steps", lambda: run_train_steps(request, job))
+            ).result()
             store_idempotent_response("train_steps", request.idempotency_key, request, response)
             return response
         except Exception as exc:
@@ -1319,7 +1399,7 @@ def create_app(
                 mark_run_failed(run_id, exc)
                 raise
 
-        return executor.submit(op).result()
+        return executor.submit(lambda: service_metrics.observe("forward_backward", op)).result()
 
     @app.post("/mixed_forward_backward")
     def mixed_forward_backward(request: MixedForwardBackwardRequest) -> dict[str, ForwardBackwardResponse]:
@@ -1362,7 +1442,7 @@ def create_app(
                         mark_run_failed(run_id, exc)
                 raise
 
-        return executor.submit(op).result()
+        return executor.submit(lambda: service_metrics.observe("mixed_forward_backward", op)).result()
 
     @app.post("/runs/{run_id}/optim_step")
     def optim_step(run_id: str, request: OptimStepRequest) -> OptimStepResponseModel:
@@ -1388,7 +1468,7 @@ def create_app(
                 mark_run_failed(run_id, exc)
                 raise
 
-        return executor.submit(op).result()
+        return executor.submit(lambda: service_metrics.observe("optim_step", op)).result()
 
     @app.post("/runs/{run_id}/save")
     def save(run_id: str, request: SaveRequest) -> SaveResponse:
@@ -1414,7 +1494,7 @@ def create_app(
                 mark_run_failed(run_id, exc)
                 raise
 
-        return executor.submit(op).result()
+        return executor.submit(lambda: service_metrics.observe("save", op)).result()
 
     @app.post("/runs/{run_id}/detach")
     def detach_run(run_id: str, request: DetachRunRequest) -> DetachRunResponse:
@@ -1441,7 +1521,7 @@ def create_app(
                 mark_run_failed(run_id, exc)
                 raise
 
-        return executor.submit(op).result()
+        return executor.submit(lambda: service_metrics.observe("detach", op)).result()
 
     @app.post("/runs/{run_id}/save_and_detach")
     def save_and_detach(run_id: str, request: SaveAndDetachRequest) -> SaveAndDetachResponse:
@@ -1476,7 +1556,7 @@ def create_app(
                 mark_run_failed(run_id, exc)
                 raise
 
-        return executor.submit(op).result()
+        return executor.submit(lambda: service_metrics.observe("save_and_detach", op)).result()
 
     @app.post("/runs/{run_id}/sample")
     def sample(run_id: str, request: SampleRequest) -> SampleResponseModel:
@@ -1493,6 +1573,6 @@ def create_app(
                 mark_run_failed(run_id, exc)
                 raise
 
-        return executor.submit(op).result()
+        return executor.submit(lambda: service_metrics.observe("sample", op)).result()
 
     return app

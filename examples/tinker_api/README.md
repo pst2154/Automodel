@@ -46,6 +46,8 @@ What works now:
   `worker_assignment_ready`.
 - One-shot `save_and_detach` saves an adapter checkpoint and unloads the
   resident adapter in the same queued operation.
+- Lightweight service metrics are exposed through `/metrics` and embedded in
+  `/health`, including operation counts, failures, and durations.
 - Opt-in live Tinker parity harness.
 - Nemotron Nano 30B A3B direct mixed-LoRA smoke.
 - Nemotron Nano 30B A3B HTTP mixed-LoRA train, inference, save, and restore
@@ -168,6 +170,7 @@ Current endpoints:
 
 ```text
 GET  /health
+GET  /metrics
 POST /runs
 GET  /runs
 GET  /runs/{run_id}
@@ -311,6 +314,7 @@ tile.
 - Focused service suite after worker reconcile/readiness hardening: `35 passed`.
 - Focused service suite after run detach lifecycle support: `37 passed`.
 - Focused service suite after save-and-detach lifecycle support: `38 passed`.
+- Focused service suite after service metrics support: `38 passed`.
 - Nemotron direct mixed-LoRA smoke: passed.
 - Nemotron HTTP mixed-LoRA train/inference/save smoke: passed.
 - Nemotron HTTP restart restore smoke: passed.

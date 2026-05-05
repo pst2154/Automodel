@@ -120,8 +120,17 @@ def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch, tmp_path):
     assert saved["run"]["last_checkpoint_path"] == "/tmp/atlas-test"
 
     record = client.get(f"/runs/{first['run_id']}").json()
+    metrics = client.get("/metrics").json()
+    health = client.get("/health").json()
     assert record["sequence"] >= 4
     assert record["last_checkpoint_path"] == "/tmp/atlas-test"
+    assert metrics["operations"]["create_run"]["count"] == 2
+    assert metrics["operations"]["mixed_forward_backward"]["count"] == 1
+    assert metrics["operations"]["optim_step"]["count"] == 1
+    assert metrics["operations"]["sample"]["count"] == 1
+    assert metrics["operations"]["save"]["count"] == 1
+    assert metrics["operations"]["save"]["last_seconds"] >= 0.0
+    assert health["metrics"]["operations"]["create_run"]["count"] == 2
 
 
 def test_mixed_lora_server_reports_supervised_worker_processes(monkeypatch, tmp_path):
@@ -565,8 +574,12 @@ def test_mixed_lora_server_enforces_resident_adapter_capacity(monkeypatch, tmp_p
 
     assert client.post("/runs", json={"name": "atlas"}).status_code == 200
     response = client.post("/runs", json={"name": "borealis"})
+    metrics = client.get("/metrics").json()
 
     assert response.status_code == 429
+    assert metrics["operations"]["create_run"]["count"] == 2
+    assert metrics["operations"]["create_run"]["failures"] == 1
+    assert "HTTPException" in metrics["operations"]["create_run"]["last_error"]
 
 
 def test_mixed_lora_server_enforces_tenant_adapter_capacity(monkeypatch, tmp_path):
