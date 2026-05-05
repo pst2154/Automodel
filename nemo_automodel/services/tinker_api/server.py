@@ -124,6 +124,13 @@ class SaveRequest(BaseModel):
     idempotency_key: Optional[str] = None
 
 
+class SaveAndDetachRequest(BaseModel):
+    """Save-and-detach request."""
+
+    name: str
+    idempotency_key: Optional[str] = None
+
+
 class DetachRunRequest(BaseModel):
     """Detach request."""
 
@@ -248,6 +255,14 @@ class DetachRunResponse(BaseModel):
 
     run: RunRecord
     output: dict[str, Any]
+
+
+class SaveAndDetachResponse(BaseModel):
+    """Save-and-detach response with run metadata."""
+
+    run: RunRecord
+    save_output: dict[str, Any]
+    detach_output: dict[str, Any]
 
 
 class SampleResponseModel(BaseModel):
@@ -1423,6 +1438,41 @@ def create_app(
                 return response
             except Exception as exc:
                 store_idempotent_error(f"detach:{run_id}", request.idempotency_key, request, exc)
+                mark_run_failed(run_id, exc)
+                raise
+
+        return executor.submit(op).result()
+
+    @app.post("/runs/{run_id}/save_and_detach")
+    def save_and_detach(run_id: str, request: SaveAndDetachRequest) -> SaveAndDetachResponse:
+        existing = get_idempotent_response(f"save_and_detach:{run_id}", request.idempotency_key, request)
+        if existing is not None:
+            return existing
+        enforce_tenant_rate_limit(get_record(run_id).tenant_id, "save_and_detach")
+
+        def op() -> SaveAndDetachResponse:
+            client = get_run(run_id)
+            try:
+                record = mark_run(run_id, status="saving")
+                save_output = client.save_state(request.name).result()
+                record.last_checkpoint_path = save_output.path
+                record_worker_operation("save", [run_id], {"name": request.name})
+                record = mark_run(run_id, status="detaching")
+                detach_output = client.detach().result()
+                record_worker_operation("detach_run", [run_id], {"adapter_id": client.adapter_id})
+                detach_run_from_worker(record)
+                runs.pop(run_id, None)
+                record = mark_run(run_id, status="detached")
+                run_store.save(records)
+                response = SaveAndDetachResponse(
+                    run=record,
+                    save_output=asdict(save_output),
+                    detach_output=asdict(detach_output),
+                )
+                store_idempotent_response(f"save_and_detach:{run_id}", request.idempotency_key, request, response)
+                return response
+            except Exception as exc:
+                store_idempotent_error(f"save_and_detach:{run_id}", request.idempotency_key, request, exc)
                 mark_run_failed(run_id, exc)
                 raise
 

@@ -234,6 +234,38 @@ def test_mixed_lora_server_detach_releases_resident_capacity(monkeypatch, tmp_pa
     assert second.status_code == 200
 
 
+def test_mixed_lora_server_save_and_detach_saves_before_unloading(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, worker_processes=1)
+    with fastapi_testclient.TestClient(app) as client:
+        created = client.post("/runs", json={"name": "placed"}).json()
+        run_id = created["run_id"]
+        worker_id = created["worker_id"]
+
+        response = client.post(
+            f"/runs/{run_id}/save_and_detach",
+            json={"name": "placed-final", "idempotency_key": "save-detach-placed"},
+        ).json()
+        repeated = client.post(
+            f"/runs/{run_id}/save_and_detach",
+            json={"name": "placed-final", "idempotency_key": "save-detach-placed"},
+        ).json()
+        worker_runs = client.get(f"/workers/{worker_id}/runs").json()
+        worker_operations = client.get(f"/workers/{worker_id}/operations").json()
+
+        assert repeated == response
+        assert response["run"]["status"] == "detached"
+        assert response["run"]["last_checkpoint_path"] == "/tmp/placed-final"
+        assert response["save_output"] == {"path": "/tmp/placed-final"}
+        assert response["detach_output"] == {"adapter_id": created["adapter_id"], "remaining_adapters": 0}
+        assert worker_runs["assigned_run_count"] == 0
+        assert [operation["operation"] for operation in worker_operations["operations"][-2:]] == [
+            "save",
+            "detach_run",
+        ]
+        assert client.post(f"/runs/{run_id}/optim_step", json={"learning_rate": 0.001}).status_code == 404
+
+
 def test_mixed_lora_server_reattaches_runs_after_worker_restart(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
     app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, worker_processes=1)

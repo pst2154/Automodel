@@ -111,6 +111,10 @@ def require_ready_run(state: dict[str, Any], label: str) -> None:
         raise RuntimeError(f"{label} run has last_error: {state['last_error']}")
 
 
+def detach_run(base_url: str, run_id: str) -> dict[str, Any]:
+    return post_json(base_url, f"/runs/{run_id}/detach", {})
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Exercise deployed Nemotron Nano mixed-LoRA HTTP API.")
     parser.add_argument("--base-url", default="http://127.0.0.1:18080")
@@ -129,6 +133,7 @@ def main() -> None:
     parser.add_argument("--atlas-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-atlas-smoke")
     parser.add_argument("--borealis-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-borealis-smoke")
     parser.add_argument("--save-prefix", default="nemotron-api")
+    parser.add_argument("--detach-after", action="store_true")
     args = parser.parse_args()
 
     if args.wait_for_server > 0:
@@ -180,6 +185,9 @@ def main() -> None:
         print("borealis_restored_sample=" + borealis_text.replace("\n", "\\n"))
         print("atlas_state=" + json.dumps(atlas_state, sort_keys=True))
         print("borealis_state=" + json.dumps(borealis_state, sort_keys=True))
+        if args.detach_after:
+            print("atlas_detach=" + json.dumps(detach_run(args.base_url, atlas_run_id), sort_keys=True))
+            print("borealis_detach=" + json.dumps(detach_run(args.base_url, borealis_run_id), sort_keys=True))
         return
 
     atlas = post_json(args.base_url, "/runs", {"name": "nemotron-atlas", "tenant_id": args.tenant_id})
@@ -265,6 +273,9 @@ def main() -> None:
     print("borealis_state=" + json.dumps(borealis_state, sort_keys=True))
     print(f"atlas_saved={atlas_save['output']['path']}")
     print(f"borealis_saved={borealis_save['output']['path']}")
+    if args.detach_after:
+        print("atlas_detach=" + json.dumps(detach_run(args.base_url, atlas["run_id"]), sort_keys=True))
+        print("borealis_detach=" + json.dumps(detach_run(args.base_url, borealis["run_id"]), sort_keys=True))
 
 
 if __name__ == "__main__":
