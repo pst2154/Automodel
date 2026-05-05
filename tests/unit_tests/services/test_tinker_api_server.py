@@ -252,6 +252,57 @@ def test_mixed_lora_server_prepares_nemo_rl_docker_cache_mount(monkeypatch, tmp_
     assert "HF_DATASETS_CACHE=/root/.cache/huggingface/datasets" in command
 
 
+def test_mixed_lora_server_prepares_nemo_rl_docker_output_mount(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    rl_repo = tmp_path / "RL"
+    (rl_repo / "examples" / "configs").mkdir(parents=True)
+    (rl_repo / "examples" / "run_grpo.py").write_text("print('not launched')\n", encoding="utf-8")
+    (rl_repo / "examples" / "configs" / "grpo_math_1B.yaml").write_text("grpo: {}\n", encoding="utf-8")
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, rl_repo_dir=str(rl_repo))
+    client = fastapi_testclient.TestClient(app)
+
+    response = client.post(
+        "/rl/jobs",
+        json={
+            "name": "dry-run",
+            "launcher": "docker",
+            "runner": "python",
+            "dry_run": True,
+            "docker_output_dir": "/host/outputs",
+        },
+    ).json()
+
+    command = response["job"]["command"]
+    assert "/host/outputs:/workspace/rl_outputs" in command
+    assert "logger.log_dir=/workspace/rl_outputs" in command
+
+
+def test_mixed_lora_server_keeps_explicit_logger_dir_with_output_mount(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    rl_repo = tmp_path / "RL"
+    (rl_repo / "examples" / "configs").mkdir(parents=True)
+    (rl_repo / "examples" / "run_grpo.py").write_text("print('not launched')\n", encoding="utf-8")
+    (rl_repo / "examples" / "configs" / "grpo_math_1B.yaml").write_text("grpo: {}\n", encoding="utf-8")
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, rl_repo_dir=str(rl_repo))
+    client = fastapi_testclient.TestClient(app)
+
+    response = client.post(
+        "/rl/jobs",
+        json={
+            "name": "dry-run",
+            "launcher": "docker",
+            "runner": "python",
+            "dry_run": True,
+            "docker_output_dir": "/host/outputs",
+            "overrides": ["logger.log_dir=/custom"],
+        },
+    ).json()
+
+    command = response["job"]["command"]
+    assert "logger.log_dir=/custom" in command
+    assert "logger.log_dir=/workspace/rl_outputs" not in command
+
+
 def test_mixed_lora_server_prepares_nemo_rl_docker_gpu_scope(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
     rl_repo = tmp_path / "RL"

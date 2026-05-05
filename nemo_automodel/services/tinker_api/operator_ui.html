@@ -518,6 +518,10 @@ Answer:</textarea></label>
             <label>Docker HF cache dir<input id="rl-docker-hf-cache" value="" placeholder="optional writable cache dir" /></label>
             <label>Container HF cache dir<input id="rl-docker-container-hf-cache" value="/root/.cache/huggingface" /></label>
           </div>
+          <div class="two">
+            <label>Docker output dir<input id="rl-docker-output" value="" placeholder="optional persistent output dir" /></label>
+            <label>Container output dir<input id="rl-docker-container-output" value="/workspace/rl_outputs" /></label>
+          </div>
           <div class="four">
             <label>Launcher<select id="rl-launcher"><option value="docker">docker</option><option value="local">local</option></select></label>
             <label>Runner<select id="rl-runner"><option value="python">python</option><option value="uv">uv</option></select></label>
@@ -549,8 +553,7 @@ policy.train_global_batch_size=2
 policy.train_micro_batch_size=1
 policy.generation_batch_size=2
 checkpointing.enabled=false
-logger.wandb_enabled=false
-logger.log_dir=/tmp/nvidia-tinker-rl-smoke</textarea></label>
+logger.wandb_enabled=false</textarea></label>
           <div class="big-actions">
             <button id="rl-dry-run" class="blue">Show RL Command</button>
             <button id="rl-launch" class="primary">Launch RL Job</button>
@@ -757,6 +760,8 @@ logger.log_dir=/tmp/nvidia-tinker-rl-smoke</textarea></label>
           docker_hf_cache_dir: $("rl-docker-hf-cache").value.trim() || null,
           docker_container_hf_cache_dir:
             $("rl-docker-container-hf-cache").value.trim() || "/root/.cache/huggingface",
+          docker_output_dir: $("rl-docker-output").value.trim() || null,
+          docker_container_output_dir: $("rl-docker-container-output").value.trim() || "/workspace/rl_outputs",
           docker_user: $("rl-docker-user").value.trim() || null,
           dry_run: dryRun,
           run_async: true,

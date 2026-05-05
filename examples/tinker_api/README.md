@@ -243,6 +243,7 @@ curl -s http://127.0.0.1:18080/rl/jobs \
     "launcher": "docker",
     "runner": "python",
     "container_image": "nvcr.io/nvidia/nemo-rl:v0.6.0",
+    "docker_output_dir": "/home/scratch.asteiner/nvidia_tinker_rl_outputs",
     "dry_run": true,
     "overrides": [
       "policy.dtensor_cfg.lora_cfg.enabled=true",
@@ -255,8 +256,7 @@ curl -s http://127.0.0.1:18080/rl/jobs \
       "policy.train_micro_batch_size=1",
       "policy.generation_batch_size=2",
       "checkpointing.enabled=false",
-      "logger.wandb_enabled=false",
-      "logger.log_dir=/tmp/nvidia-tinker-rl-smoke"
+      "logger.wandb_enabled=false"
     ]
   }'
 ```
@@ -346,6 +346,10 @@ host checkout that may be missing submodules.
   persistent Hugging Face model and dataset caches. The directory must be
   writable by the nested container user. On root-squashed NFS scratch, create a
   dedicated writable cache directory before enabling this.
+- `docker_output_dir`: optional path as seen by the host Docker daemon for
+  persistent NeMo-RL outputs. When set, the bridge mounts it into the nested
+  container and adds `logger.log_dir=<container output dir>` unless the request
+  already includes an explicit `logger.log_dir=...` override.
 - `docker_gpus`: Docker GPU selector passed to `docker run --gpus`. The default
   is `all`; use values such as `device=0` for shared-host smoke tests.
 - `max_runtime_seconds`: optional wall-clock timeout for the launched RL

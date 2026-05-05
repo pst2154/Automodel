@@ -237,6 +237,8 @@ class RLJobRequest(BaseModel):
     docker_container_repo_dir: str = "/opt/nemo-rl"
     docker_hf_cache_dir: Optional[str] = None
     docker_container_hf_cache_dir: str = "/root/.cache/huggingface"
+    docker_output_dir: Optional[str] = None
+    docker_container_output_dir: str = "/workspace/rl_outputs"
     docker_user: Optional[str] = None
     docker_gpus: str = "all"
     container_image: str = "nvcr.io/nvidia/nemo-rl:v0.6.0"
@@ -542,6 +544,9 @@ def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str
     if request.max_runtime_seconds is not None and request.max_runtime_seconds <= 0:
         raise ValueError("max_runtime_seconds must be > 0")
     overrides = _build_rl_overrides(request)
+    container_output_dir = request.docker_container_output_dir.rstrip("/") or "/workspace/rl_outputs"
+    if request.docker_output_dir:
+        _append_rl_override_if_absent(overrides, "logger.log_dir", container_output_dir)
     if request.launcher == "local":
         runner_prefix = ["uv", "run", "python", "-u"] if request.runner == "uv" else ["python", "-u"]
         return [*runner_prefix, str(entrypoint), "--config", str(config_path), *overrides]
@@ -581,6 +586,8 @@ def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str
                 f"HF_DATASETS_CACHE={container_cache}/datasets",
             ]
         )
+    if request.docker_output_dir:
+        command.extend(["-v", f"{request.docker_output_dir}:{container_output_dir}"])
     command.extend(
         [
             "-w",
