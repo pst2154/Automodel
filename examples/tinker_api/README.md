@@ -35,7 +35,9 @@ What works now:
 - Backends: `loop`, `grouped`, `triton`, and `grouped_triton`.
 - Supervised worker processes with durable run placement and management RPC
   (`/workers/{worker_id}/ping`, `/workers/{worker_id}/echo`,
-  `/workers/{worker_id}/runs`).
+  `/workers/{worker_id}/runs`, `/workers/{worker_id}/operations`).
+- Worker-side model-operation envelopes for create, forward/backward, optimizer
+  step, save, sample, and server-owned train-step sub-operations.
 - Opt-in live Tinker parity harness.
 - Nemotron Nano 30B A3B direct mixed-LoRA smoke.
 - Nemotron Nano 30B A3B HTTP mixed-LoRA train, inference, save, and restore
@@ -175,6 +177,7 @@ POST /workers/restart_dead
 POST /workers/{worker_id}/ping
 POST /workers/{worker_id}/echo
 GET  /workers/{worker_id}/runs
+GET  /workers/{worker_id}/operations
 ```
 
 Start a localhost-only Nemotron HTTP server on `4u8g-gen-0277` with:
@@ -292,6 +295,7 @@ tile.
 
 - Full Tinker API unit suite in container: `31 passed`.
 - Focused server suite after worker-assignment RPC changes: `18 passed`.
+- Focused service suite after worker-operation envelopes: `33 passed`.
 - Nemotron direct mixed-LoRA smoke: passed.
 - Nemotron HTTP mixed-LoRA train/inference/save smoke: passed.
 - Nemotron HTTP restart restore smoke: passed.
@@ -311,9 +315,10 @@ test results.
    record the outputs here.
 
 2. **Move model operations out of the API process.**
-   Worker assignment RPC now tracks attached runs. The next production step is
-   making a worker RPC own the model and implement create/forward_backward,
-   optim_step, save, and sample.
+   Worker assignment RPC now tracks attached runs and records operation
+   envelopes. The next production step is replacing operation recording with
+   actual worker execution for create/forward_backward, optim_step, save, and
+   sample.
 
 3. **Add a short multi-step Nemotron job test.**
    Exercise `/train_steps` with `run_async=true`, poll `/jobs/{job_id}`, verify

@@ -265,6 +265,14 @@ class WorkerRunsResponse(BaseModel):
     assigned_run_count: int = 0
 
 
+class WorkerOperationsResponse(BaseModel):
+    """Model-operation RPC envelopes recorded by one supervised worker."""
+
+    worker: WorkerProcessRecord
+    operations: list[dict[str, Any]] = Field(default_factory=list)
+    operation_count: int = 0
+
+
 def _datum_from_request(request: DatumRequest) -> Datum:
     loss_fn_inputs = dict(request.loss_fn_inputs)
     target_tokens = loss_fn_inputs.get("target_tokens")
@@ -600,6 +608,23 @@ def create_app(
             return
         worker_manager.attach_run(record.worker_id, _model_to_dict(record))
 
+    def record_worker_operation(operation: str, run_ids: list[str], payload: Optional[dict[str, Any]] = None) -> None:
+        if worker_manager is None:
+            return
+        worker_run_ids: dict[str, list[str]] = {}
+        for run_id in run_ids:
+            record = get_record(run_id)
+            if record.worker_id is None:
+                continue
+            worker_run_ids.setdefault(record.worker_id, []).append(run_id)
+        for worker_id, assigned_run_ids in worker_run_ids.items():
+            worker_manager.record_operation(
+                worker_id,
+                operation=operation,
+                run_ids=assigned_run_ids,
+                payload=payload,
+            )
+
     if worker_manager is not None:
         with records_lock:
             dirty_records = False
@@ -681,6 +706,18 @@ def create_app(
             worker=worker,
             runs=result.get("runs", []),
             assigned_run_count=result.get("assigned_run_count", 0),
+        )
+
+    @app.get("/workers/{worker_id}/operations", response_model=WorkerOperationsResponse)
+    def list_worker_operations(worker_id: str) -> WorkerOperationsResponse:
+        if worker_manager is None:
+            raise HTTPException(status_code=404, detail="Worker processes are not enabled")
+        worker = get_worker_record(worker_id)
+        result = worker_manager.list_operations(worker_id)
+        return WorkerOperationsResponse(
+            worker=worker,
+            operations=result.get("operations", []),
+            operation_count=result.get("operation_count", 0),
         )
 
     def tenant_key(tenant_id: Optional[str]) -> str:
@@ -916,6 +953,11 @@ def create_app(
                     request.loss_fn,
                     request.loss_fn_config,
                 ).result()
+                record_worker_operation(
+                    "train_steps.forward_backward",
+                    run_ids,
+                    {"job_id": job.job_id, "step": step + 1, "loss_fn": request.loss_fn},
+                )
                 losses = {}
                 for run_id, client in clients_by_run.items():
                     output = mixed_outputs[client.adapter_id]
@@ -930,6 +972,11 @@ def create_app(
                 for run_id, client in clients_by_run.items():
                     mark_run(run_id, status="optimizing")
                     step_output = client.optim_step(adam_params).result()
+                    record_worker_operation(
+                        "train_steps.optim_step",
+                        [run_id],
+                        {"job_id": job.job_id, "step": step + 1, "learning_rate": request.learning_rate},
+                    )
                     record = mark_run(run_id, status="ready")
                     record.optimizer_steps = step_output.step
                     outputs[f"{run_id}:optim_step"] = asdict(step_output)
@@ -949,6 +996,7 @@ def create_app(
                 client = clients_by_run[run_id]
                 mark_run(run_id, status="saving")
                 save_output = client.save_state(save_name).result()
+                record_worker_operation("train_steps.save", [run_id], {"job_id": job.job_id, "name": save_name})
                 record = mark_run(run_id, status="ready")
                 record.last_checkpoint_path = save_output.path
                 saved_paths[run_id] = save_output.path
@@ -1034,6 +1082,14 @@ def create_app(
                     records[run_id] = record
                     run_store.save(records)
                 attach_run_to_worker(record)
+                record_worker_operation(
+                    "create_run",
+                    [run_id],
+                    {
+                        "adapter_id": record.adapter_id,
+                        "checkpoint_path": request.checkpoint_path,
+                    },
+                )
                 response = CreateRunResponse(
                     run_id=run_id,
                     adapter_id=client.adapter_id,
@@ -1128,6 +1184,11 @@ def create_app(
                     request.loss_fn,
                     request.loss_fn_config,
                 ).result()[client.adapter_id]
+                record_worker_operation(
+                    "forward_backward",
+                    [run_id],
+                    {"loss_fn": request.loss_fn, "batch_size": len(request.data)},
+                )
                 record = mark_run(run_id, status="ready")
                 record.forward_backward_calls += 1
                 record.last_loss = output.loss
@@ -1160,6 +1221,11 @@ def create_app(
                     request.loss_fn,
                     request.loss_fn_config,
                 ).result()
+                record_worker_operation(
+                    "mixed_forward_backward",
+                    active_run_ids,
+                    {"loss_fn": request.loss_fn, "num_runs": len(active_run_ids)},
+                )
                 responses = {}
                 for run_id, adapter_id in run_to_adapter.items():
                     output = outputs[adapter_id]
@@ -1190,6 +1256,7 @@ def create_app(
             try:
                 mark_run(run_id, status="optimizing")
                 output = client.optim_step(_adam_from_request(request)).result()
+                record_worker_operation("optim_step", [run_id], {"learning_rate": request.learning_rate})
                 record = mark_run(run_id, status="ready")
                 record.optimizer_steps = output.step
                 run_store.save(records)
@@ -1215,6 +1282,7 @@ def create_app(
             try:
                 mark_run(run_id, status="saving")
                 output = client.save_state(request.name).result()
+                record_worker_operation("save", [run_id], {"name": request.name})
                 record = mark_run(run_id, status="ready")
                 record.last_checkpoint_path = output.path
                 run_store.save(records)
@@ -1236,6 +1304,7 @@ def create_app(
             client = get_run(run_id)
             try:
                 output = service.sample(client.adapter_id, request.prompt, _sampling_from_request(request)).result()
+                record_worker_operation("sample", [run_id], {"max_new_tokens": request.max_new_tokens})
                 record = mark_run(run_id, status="ready")
                 return SampleResponseModel(run=record, output=asdict(output))
             except Exception as exc:

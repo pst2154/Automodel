@@ -35,6 +35,7 @@ def _default_start_method() -> str:
 def _rpc_worker(stop_event, command_queue, result_queue) -> None:
     """Serve simple worker-management RPC commands until shutdown."""
     assigned_runs: dict[str, dict[str, Any]] = {}
+    model_operations: list[dict[str, Any]] = []
     while not stop_event.is_set():
         try:
             request = command_queue.get(timeout=0.1)
@@ -65,6 +66,23 @@ def _rpc_worker(stop_event, command_queue, result_queue) -> None:
                 response = {"run_id": run_id, "assigned_run_count": len(assigned_runs)}
             elif command == "list_runs":
                 response = {"runs": list(assigned_runs.values()), "assigned_run_count": len(assigned_runs)}
+            elif command == "record_operation":
+                operation = payload.get("operation")
+                run_ids = payload.get("run_ids")
+                if not isinstance(operation, str):
+                    raise ValueError("record_operation requires operation")
+                if not isinstance(run_ids, list) or not all(isinstance(run_id, str) for run_id in run_ids):
+                    raise ValueError("record_operation requires run_ids")
+                record = {
+                    "operation": operation,
+                    "run_ids": run_ids,
+                    "payload": payload.get("payload", {}),
+                    "time": time.time(),
+                }
+                model_operations.append(record)
+                response = {"operation_count": len(model_operations), "operation": record}
+            elif command == "list_operations":
+                response = {"operations": list(model_operations), "operation_count": len(model_operations)}
             elif command == "stop":
                 stop_event.set()
                 response = {"stopping": True}
@@ -90,6 +108,7 @@ class WorkerProcessRecord:
     status: str
     restarts: int = 0
     assigned_run_count: int = 0
+    operation_count: int = 0
     started_at: float = field(default_factory=time.time)
     stopped_at: Optional[float] = None
     last_exitcode: Optional[int] = None
@@ -230,6 +249,30 @@ class ProcessWorkerManager:
         self._update_assigned_count(worker_id, result)
         return result
 
+    def record_operation(
+        self,
+        worker_id: str,
+        *,
+        operation: str,
+        run_ids: list[str],
+        payload: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """Record a model-operation RPC envelope for one worker process."""
+        result = self.submit(
+            worker_id,
+            "record_operation",
+            payload={"operation": operation, "run_ids": run_ids, "payload": payload or {}},
+            timeout_seconds=5.0,
+        )
+        self._update_operation_count(worker_id, result)
+        return result
+
+    def list_operations(self, worker_id: str) -> dict[str, Any]:
+        """Return model-operation RPC envelopes recorded by one worker process."""
+        result = self.submit(worker_id, "list_operations", timeout_seconds=5.0)
+        self._update_operation_count(worker_id, result)
+        return result
+
     def _restart_count(self, worker_id: str) -> int:
         slot = self._slots.get(worker_id)
         return 0 if slot is None else slot.record.restarts
@@ -239,6 +282,12 @@ class ProcessWorkerManager:
         count = result.get("assigned_run_count")
         if slot is not None and isinstance(count, int):
             slot.record.assigned_run_count = count
+
+    def _update_operation_count(self, worker_id: str, result: dict[str, Any]) -> None:
+        slot = self._slots.get(worker_id)
+        count = result.get("operation_count")
+        if slot is not None and isinstance(count, int):
+            slot.record.operation_count = count
 
     def _start_slot(self, worker_id: str, *, restarts: int) -> _WorkerSlot:
         stop_event = self._ctx.Event()

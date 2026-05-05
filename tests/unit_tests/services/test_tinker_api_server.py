@@ -133,6 +133,7 @@ def test_mixed_lora_server_reports_supervised_worker_processes(monkeypatch, tmp_
             json={"payload": {"op": "future_create_run", "run_id": created["run_id"]}},
         ).json()
         worker_runs = client.get(f"/workers/{created['worker_id']}/runs").json()
+        worker_operations = client.get(f"/workers/{created['worker_id']}/operations").json()
 
         assert health["worker_processes"] == 2
         assert len(health["workers"]) == 2
@@ -148,7 +149,44 @@ def test_mixed_lora_server_reports_supervised_worker_processes(monkeypatch, tmp_
         assert worker_runs["worker"]["worker_id"] == created["worker_id"]
         assert worker_runs["assigned_run_count"] == 1
         assert worker_runs["runs"][0]["run_id"] == created["run_id"]
+        assert worker_operations["worker"]["worker_id"] == created["worker_id"]
+        assert worker_operations["operation_count"] == 1
+        assert worker_operations["operations"][0]["operation"] == "create_run"
+        assert worker_operations["operations"][0]["run_ids"] == [created["run_id"]]
         assert client.get("/workers/unknown/runs").status_code == 404
+        assert client.get("/workers/unknown/operations").status_code == 404
+
+
+def test_mixed_lora_server_records_worker_operation_envelopes(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, worker_processes=1)
+    with fastapi_testclient.TestClient(app) as client:
+        created = client.post("/runs", json={"name": "placed"}).json()
+        run_id = created["run_id"]
+        worker_id = created["worker_id"]
+
+        client.post(
+            "/mixed_forward_backward",
+            json={"batches": {run_id: [{"model_input": {"tokens": [1, 2, 3]}, "loss_fn_inputs": {}}]}},
+        )
+        client.post(f"/runs/{run_id}/optim_step", json={"learning_rate": 0.001})
+        client.post(f"/runs/{run_id}/sample", json={"prompt": "hello", "max_new_tokens": 3})
+        client.post(f"/runs/{run_id}/save", json={"name": "placed-save"})
+        worker_operations = client.get(f"/workers/{worker_id}/operations").json()
+
+        assert [operation["operation"] for operation in worker_operations["operations"]] == [
+            "create_run",
+            "mixed_forward_backward",
+            "optim_step",
+            "sample",
+            "save",
+        ]
+        assert worker_operations["operation_count"] == 5
+        assert worker_operations["operations"][1]["payload"] == {
+            "loss_fn": "cross_entropy",
+            "num_runs": 1,
+        }
+        assert worker_operations["operations"][2]["payload"] == {"learning_rate": 0.001}
 
 
 def test_mixed_lora_server_restores_run_metadata(monkeypatch, tmp_path):
