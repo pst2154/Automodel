@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Async LoRA Training Demo</title>
+    <style>
+      :root {
+        --bg: #090b10;
+        --panel: #111822;
+        --panel-2: #172232;
+        --ink: #f4f7fb;
+        --muted: #8fa0b5;
+        --green: #60d394;
+        --blue: #5da8ff;
+        --gold: #ffd166;
+        --red: #ff6b6b;
+        --line: rgba(255, 255, 255, 0.16);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 12% 12%, rgba(93, 168, 255, 0.16), transparent 30%),
+          radial-gradient(circle at 78% 8%, rgba(96, 211, 148, 0.12), transparent 26%),
+          linear-gradient(135deg, #080a0f, #10151f 58%, #080a0f);
+        font-family: Avenir Next, Segoe UI, sans-serif;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        align-items: end;
+        padding: 26px clamp(18px, 4vw, 42px) 16px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(34px, 5vw, 74px);
+        line-height: 0.95;
+        letter-spacing: 0;
+      }
+
+      p {
+        margin: 8px 0 0;
+        color: var(--muted);
+      }
+
+      button {
+        min-height: 44px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 14px;
+        color: var(--ink);
+        background: var(--panel-2);
+        cursor: pointer;
+        font-weight: 800;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: 1fr 360px;
+        gap: 18px;
+        padding: 0 clamp(18px, 4vw, 42px) 34px;
+      }
+
+      .stage,
+      .side {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(17, 24, 34, 0.78);
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
+      }
+
+      .stage {
+        position: relative;
+        min-height: 620px;
+        overflow: hidden;
+        padding: 24px;
+      }
+
+      .lane-title {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 900;
+        text-transform: uppercase;
+      }
+
+      .base {
+        position: absolute;
+        left: 50%;
+        top: 46%;
+        width: 230px;
+        height: 230px;
+        display: grid;
+        place-items: center;
+        border: 2px solid rgba(96, 211, 148, 0.75);
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(96, 211, 148, 0.24), rgba(17, 24, 34, 0.94));
+        transform: translate(-50%, -50%);
+        box-shadow: 0 0 60px rgba(96, 211, 148, 0.28);
+        text-align: center;
+      }
+
+      .base strong {
+        display: block;
+        font-size: 28px;
+      }
+
+      .gpu-ring {
+        position: absolute;
+        inset: 86px;
+        border: 1px dashed rgba(255, 255, 255, 0.25);
+        border-radius: 999px;
+        animation: spin 20s linear infinite;
+      }
+
+      .request,
+      .adapter {
+        position: absolute;
+        min-width: 148px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px;
+        background: var(--panel-2);
+        box-shadow: 0 18px 38px rgba(0, 0, 0, 0.22);
+      }
+
+      .request {
+        left: 28px;
+        transform: translateX(-220px);
+        opacity: 0;
+      }
+
+      .adapter {
+        right: 34px;
+        opacity: 0.5;
+      }
+
+      .request strong,
+      .adapter strong {
+        display: block;
+        font-size: 18px;
+      }
+
+      .request span,
+      .adapter span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      #req-a {
+        top: 122px;
+      }
+
+      #req-b {
+        top: 250px;
+      }
+
+      #req-c {
+        top: 420px;
+      }
+
+      #adapter-a {
+        top: 112px;
+      }
+
+      #adapter-b {
+        top: 254px;
+      }
+
+      #adapter-c {
+        top: 398px;
+      }
+
+      .active {
+        border-color: var(--gold);
+        box-shadow: 0 0 34px rgba(255, 209, 102, 0.24);
+      }
+
+      .done {
+        border-color: var(--green);
+        background: rgba(96, 211, 148, 0.12);
+        opacity: 1;
+      }
+
+      .packet {
+        position: absolute;
+        left: 30%;
+        top: 45%;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: var(--gold);
+        opacity: 0;
+        box-shadow: 0 0 18px var(--gold);
+      }
+
+      .side {
+        padding: 18px;
+      }
+
+      .timeline {
+        display: grid;
+        gap: 12px;
+        margin-top: 18px;
+      }
+
+      .event {
+        border-left: 4px solid var(--line);
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--muted);
+      }
+
+      .event.live {
+        border-color: var(--gold);
+        color: var(--ink);
+      }
+
+      .event.done {
+        border-color: var(--green);
+        color: var(--ink);
+      }
+
+      .progress {
+        height: 12px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #0b0f16;
+        margin-top: 8px;
+      }
+
+      .fill {
+        width: 0%;
+        height: 100%;
+        background: linear-gradient(90deg, var(--blue), var(--green));
+        transition: width 0.28s ease;
+      }
+
+      .caption {
+        position: absolute;
+        left: 24px;
+        right: 24px;
+        bottom: 18px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px;
+        background: rgba(8, 10, 15, 0.78);
+        color: var(--ink);
+        font-size: 18px;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @keyframes enter {
+        0% {
+          opacity: 0;
+          transform: translateX(-220px);
+        }
+        100% {
+          opacity: 1;
+          transform: translateX(0);
+        }
+      }
+
+      @keyframes toBase {
+        0% {
+          opacity: 0;
+          transform: translate(0, 0) scale(0.8);
+        }
+        20% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 0;
+          transform: translate(285px, 80px) scale(1.4);
+        }
+      }
+
+      @media (max-width: 980px) {
+        header,
+        main {
+          grid-template-columns: 1fr;
+        }
+
+        main {
+          display: grid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Async LoRA Arrivals</h1>
+        <p>One resident base model. LoRA jobs arrive now, soon, and later.</p>
+      </div>
+      <button id="replay">Replay Demo</button>
+    </header>
+
+    <main>
+      <section class="stage">
+        <div class="lane-title">HTTP control plane -> queued training -> resident adapters</div>
+        <div class="gpu-ring"></div>
+        <div class="base"><div><strong>Base Model</strong><span>Loaded once on GPU</span></div></div>
+        <div id="req-a" class="request"><strong>LoRA A</strong><span>arrives first</span></div>
+        <div id="req-b" class="request"><strong>LoRA B</strong><span>arrives while A trains</span></div>
+        <div id="req-c" class="request"><strong>LoRA C</strong><span>arrives later</span></div>
+        <div id="adapter-a" class="adapter"><strong>Atlas</strong><span>waiting</span><div class="progress"><div class="fill"></div></div></div>
+        <div id="adapter-b" class="adapter"><strong>Borealis</strong><span>waiting</span><div class="progress"><div class="fill"></div></div></div>
+        <div id="adapter-c" class="adapter"><strong>Comet</strong><span>waiting</span><div class="progress"><div class="fill"></div></div></div>
+        <div id="packet" class="packet"></div>
+        <div id="caption" class="caption">Press replay to watch asynchronous LoRA jobs enter the service.</div>
+      </section>
+
+      <aside class="side">
+        <h2>What The Demo Shows</h2>
+        <div class="timeline">
+          <div id="event-1" class="event">1. Client sends LoRA A and its dataset.</div>
+          <div id="event-2" class="event">2. LoRA A trains against the resident base model.</div>
+          <div id="event-3" class="event">3. LoRA B arrives before A is done.</div>
+          <div id="event-4" class="event">4. Scheduler interleaves/queues adapter work.</div>
+          <div id="event-5" class="event">5. LoRA C arrives later and joins the same service.</div>
+          <div id="event-6" class="event">6. Each adapter can be sampled independently.</div>
+        </div>
+      </aside>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const waits = [];
+
+      function sleep(ms) {
+        return new Promise((resolve) => {
+          const timer = setTimeout(resolve, ms);
+          waits.push(timer);
+        });
+      }
+
+      function reset() {
+        waits.splice(0).forEach(clearTimeout);
+        ["req-a", "req-b", "req-c"].forEach((id) => {
+          $(id).style.animation = "";
+          $(id).style.opacity = "0";
+          $(id).className = "request";
+        });
+        ["adapter-a", "adapter-b", "adapter-c"].forEach((id) => {
+          $(id).className = "adapter";
+          $(id).querySelector("span").textContent = "waiting";
+          $(id).querySelector(".fill").style.width = "0%";
+        });
+        for (let i = 1; i <= 6; i++) $("event-" + i).className = "event";
+        $("packet").style.animation = "";
+        $("caption").textContent = "Press replay to watch asynchronous LoRA jobs enter the service.";
+      }
+
+      function event(id, state) {
+        $(id).className = `event ${state}`;
+      }
+
+      function arrive(id) {
+        $(id).style.animation = "enter 0.7s ease forwards";
+      }
+
+      async function train(adapterId, label, duration) {
+        const node = $(adapterId);
+        node.className = "adapter active";
+        node.querySelector("span").textContent = `${label} training`;
+        for (let pct = 0; pct <= 100; pct += 10) {
+          node.querySelector(".fill").style.width = pct + "%";
+          await sleep(duration / 10);
+        }
+        node.className = "adapter done";
+        node.querySelector("span").textContent = `${label} ready`;
+      }
+
+      async function run() {
+        reset();
+        $("caption").textContent = "LoRA A arrives with its own task data.";
+        arrive("req-a");
+        event("event-1", "live");
+        await sleep(800);
+        event("event-1", "done");
+        event("event-2", "live");
+        const aTrain = train("adapter-a", "Atlas", 2800);
+
+        await sleep(900);
+        $("caption").textContent = "LoRA B arrives while LoRA A is still training.";
+        arrive("req-b");
+        event("event-3", "live");
+        await sleep(700);
+        event("event-3", "done");
+        event("event-4", "live");
+        const bTrain = train("adapter-b", "Borealis", 3200);
+
+        await sleep(1400);
+        $("caption").textContent = "LoRA C shows up later; the base model is still shared.";
+        arrive("req-c");
+        event("event-5", "live");
+        const cTrain = train("adapter-c", "Comet", 2200);
+
+        await Promise.all([aTrain, bTrain, cTrain]);
+        event("event-2", "done");
+        event("event-4", "done");
+        event("event-5", "done");
+        event("event-6", "live");
+        $("caption").textContent = "All adapters are resident. Sample Atlas, Borealis, or Comet independently.";
+        await sleep(1200);
+        event("event-6", "done");
+      }
+
+      $("replay").addEventListener("click", run);
+      run();
+    </script>
+  </body>
+</html>

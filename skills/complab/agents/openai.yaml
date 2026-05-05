@@ -1,0 +1,7 @@
+interface:
+  display_name: "CompLab"
+  short_description: "CompLab GPU host and scratch workflow"
+  brand_color: "#76B900"
+  default_prompt: "Use $complab to run a NeMo AutoModel validation job on the CompLab GPU host."
+policy:
+  allow_implicit_invocation: true
