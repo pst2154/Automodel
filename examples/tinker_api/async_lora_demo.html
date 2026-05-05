@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Async LoRA Training Demo</title>
+    <title>NVIDIA Tinker Async Demo</title>
     <style>
       :root {
         --bg: #050607;
@@ -112,6 +112,35 @@
         text-align: center;
       }
 
+      .pipeline {
+        position: absolute;
+        left: 50%;
+        width: 190px;
+        border: 1px solid rgba(118, 185, 0, 0.38);
+        border-radius: 14px;
+        padding: 12px;
+        background: rgba(10, 13, 16, 0.88);
+        transform: translateX(-50%);
+        text-align: center;
+      }
+
+      .pipeline strong {
+        display: block;
+      }
+
+      .pipeline span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      #validate-node {
+        top: 96px;
+      }
+
+      #queue-node {
+        bottom: 108px;
+      }
+
       .base strong {
         display: block;
         font-size: 28px;
@@ -140,6 +169,7 @@
         left: 28px;
         transform: translateX(-220px);
         opacity: 0;
+        border-color: rgba(67, 162, 255, 0.36);
       }
 
       .adapter {
@@ -321,37 +351,39 @@
   <body>
     <header>
       <div>
-        <span class="brand">NVIDIA CompLab</span>
-        <h1>Async LoRA Arrivals</h1>
-        <p>One resident base model. LoRA jobs arrive now, soon, and later.</p>
+        <span class="brand">NVIDIA Tinker</span>
+        <h1>Async Adapter Training</h1>
+        <p>Datasets and LoRA configs arrive over time; one resident base model serves them.</p>
       </div>
       <button id="replay">Replay Demo</button>
     </header>
 
     <main>
       <section class="stage">
-        <div class="lane-title">HTTP control plane -> queued training -> resident adapters</div>
+        <div class="lane-title">Dataset upload -> validation/tokenization -> async queue -> resident adapters</div>
         <div class="gpu-ring"></div>
+        <div id="validate-node" class="pipeline"><strong>Validate + Tokenize</strong><span>SFT rows become batches</span></div>
         <div class="base"><div><strong>Base Model</strong><span>Loaded once on GPU</span></div></div>
-        <div id="req-a" class="request"><strong>LoRA A</strong><span>arrives first</span></div>
-        <div id="req-b" class="request"><strong>LoRA B</strong><span>arrives while A trains</span></div>
-        <div id="req-c" class="request"><strong>LoRA C</strong><span>arrives later</span></div>
+        <div id="queue-node" class="pipeline"><strong>Async Job Queue</strong><span>late jobs can join</span></div>
+        <div id="req-a" class="request"><strong>Dataset A</strong><span>atlas.jsonl + LoRA config</span></div>
+        <div id="req-b" class="request"><strong>Dataset B</strong><span>borealis.jsonl arrives mid-run</span></div>
+        <div id="req-c" class="request"><strong>Dataset C</strong><span>comet.jsonl arrives later</span></div>
         <div id="adapter-a" class="adapter"><strong>Atlas</strong><span>waiting</span><div class="progress"><div class="fill"></div></div></div>
         <div id="adapter-b" class="adapter"><strong>Borealis</strong><span>waiting</span><div class="progress"><div class="fill"></div></div></div>
         <div id="adapter-c" class="adapter"><strong>Comet</strong><span>waiting</span><div class="progress"><div class="fill"></div></div></div>
         <div id="packet" class="packet"></div>
-        <div id="caption" class="caption">Press replay to watch asynchronous LoRA jobs enter the service.</div>
+        <div id="caption" class="caption">Press replay to watch datasets become asynchronous LoRA training jobs.</div>
       </section>
 
       <aside class="side">
-        <span class="brand">NVIDIA</span>
+        <span class="brand">NVIDIA Tinker</span>
         <h2>What The Demo Shows</h2>
         <div class="timeline">
-          <div id="event-1" class="event">1. Client sends LoRA A and its dataset.</div>
-          <div id="event-2" class="event">2. LoRA A trains against the resident base model.</div>
-          <div id="event-3" class="event">3. LoRA B arrives before A is done.</div>
-          <div id="event-4" class="event">4. Scheduler interleaves/queues adapter work.</div>
-          <div id="event-5" class="event">5. LoRA C arrives later and joins the same service.</div>
+          <div id="event-1" class="event">1. Client uploads Dataset A and LoRA config.</div>
+          <div id="event-2" class="event">2. NVIDIA Tinker validates/tokenizes rows and starts Job A.</div>
+          <div id="event-3" class="event">3. Dataset B arrives while Job A is still running.</div>
+          <div id="event-4" class="event">4. The queue schedules independent adapter training jobs.</div>
+          <div id="event-5" class="event">5. Dataset C arrives later and joins the same base-model service.</div>
           <div id="event-6" class="event">6. Each adapter can be sampled independently.</div>
         </div>
       </aside>
@@ -382,7 +414,7 @@
         });
         for (let i = 1; i <= 6; i++) $("event-" + i).className = "event";
         $("packet").style.animation = "";
-        $("caption").textContent = "Press replay to watch asynchronous LoRA jobs enter the service.";
+        $("caption").textContent = "Press replay to watch datasets become asynchronous LoRA training jobs.";
       }
 
       function event(id, state) {
@@ -407,7 +439,7 @@
 
       async function run() {
         reset();
-        $("caption").textContent = "LoRA A arrives with its own task data.";
+        $("caption").textContent = "Client uploads Dataset A plus a LoRA config.";
         arrive("req-a");
         event("event-1", "live");
         await sleep(800);
@@ -416,7 +448,7 @@
         const aTrain = train("adapter-a", "Atlas", 2800);
 
         await sleep(900);
-        $("caption").textContent = "LoRA B arrives while LoRA A is still training.";
+        $("caption").textContent = "Dataset B arrives while Atlas is still training.";
         arrive("req-b");
         event("event-3", "live");
         await sleep(700);
@@ -425,7 +457,7 @@
         const bTrain = train("adapter-b", "Borealis", 3200);
 
         await sleep(1400);
-        $("caption").textContent = "LoRA C shows up later; the base model is still shared.";
+        $("caption").textContent = "Dataset C shows up later and joins the same resident base model.";
         arrive("req-c");
         event("event-5", "live");
         const cTrain = train("adapter-c", "Comet", 2200);
