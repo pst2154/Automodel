@@ -40,6 +40,9 @@ What works now:
   step, save, sample, and server-owned train-step sub-operations.
 - Worker restart reconciliation reattaches resident runs to restarted worker
   processes.
+- Worker assignment readiness is surfaced in `/health` through
+  `model_execution`, `run_status_counts`, `stale_worker_run_ids`, and
+  `worker_assignment_ready`.
 - Opt-in live Tinker parity harness.
 - Nemotron Nano 30B A3B direct mixed-LoRA smoke.
 - Nemotron Nano 30B A3B HTTP mixed-LoRA train, inference, save, and restore
@@ -176,6 +179,7 @@ GET  /jobs/{job_id}
 POST /jobs/{job_id}/cancel
 GET  /workers
 POST /workers/restart_dead
+POST /workers/reconcile
 POST /workers/{worker_id}/ping
 POST /workers/{worker_id}/echo
 GET  /workers/{worker_id}/runs
@@ -299,6 +303,7 @@ tile.
 - Focused server suite after worker-assignment RPC changes: `18 passed`.
 - Focused service suite after worker-operation envelopes: `33 passed`.
 - Focused service suite after worker restart reconciliation: `34 passed`.
+- Focused service suite after worker reconcile/readiness hardening: `35 passed`.
 - Nemotron direct mixed-LoRA smoke: passed.
 - Nemotron HTTP mixed-LoRA train/inference/save smoke: passed.
 - Nemotron HTTP restart restore smoke: passed.

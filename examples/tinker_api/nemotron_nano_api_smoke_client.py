@@ -99,7 +99,16 @@ def poll_job(base_url: str, job_id: str, timeout_s: int) -> dict[str, Any]:
     while time.time() < deadline and job["status"] in {"queued", "running", "canceling"}:
         time.sleep(2)
         job = get_json(base_url, f"/jobs/{job_id}")
+    if job["status"] != "succeeded":
+        raise RuntimeError(f"Job {job_id} did not succeed: {json.dumps(job, sort_keys=True)}")
     return job
+
+
+def require_ready_run(state: dict[str, Any], label: str) -> None:
+    if state.get("status") != "ready":
+        raise RuntimeError(f"{label} run is not ready: {json.dumps(state, sort_keys=True)}")
+    if state.get("last_error") is not None:
+        raise RuntimeError(f"{label} run has last_error: {state['last_error']}")
 
 
 def main() -> None:
@@ -161,12 +170,16 @@ def main() -> None:
             borealis_run_id = args.borealis_run_id
         atlas_text = sample(args.base_url, atlas_run_id, atlas_prompt, args.max_new_tokens)
         borealis_text = sample(args.base_url, borealis_run_id, borealis_prompt, args.max_new_tokens)
+        atlas_state = get_json(args.base_url, f"/runs/{atlas_run_id}")
+        borealis_state = get_json(args.base_url, f"/runs/{borealis_run_id}")
+        require_ready_run(atlas_state, "atlas")
+        require_ready_run(borealis_state, "borealis")
         print(f"atlas_run={atlas_run_id}")
         print(f"borealis_run={borealis_run_id}")
         print("atlas_restored_sample=" + atlas_text.replace("\n", "\\n"))
         print("borealis_restored_sample=" + borealis_text.replace("\n", "\\n"))
-        print("atlas_state=" + json.dumps(get_json(args.base_url, f"/runs/{atlas_run_id}"), sort_keys=True))
-        print("borealis_state=" + json.dumps(get_json(args.base_url, f"/runs/{borealis_run_id}"), sort_keys=True))
+        print("atlas_state=" + json.dumps(atlas_state, sort_keys=True))
+        print("borealis_state=" + json.dumps(borealis_state, sort_keys=True))
         return
 
     atlas = post_json(args.base_url, "/runs", {"name": "nemotron-atlas", "tenant_id": args.tenant_id})
@@ -202,6 +215,8 @@ def main() -> None:
         last_losses = job.get("result", {}).get("last_losses")
         atlas_save = {"output": {"path": job.get("result", {}).get("saved_paths", {}).get(atlas["run_id"])}}
         borealis_save = {"output": {"path": job.get("result", {}).get("saved_paths", {}).get(borealis["run_id"])}}
+        if atlas_save["output"]["path"] is None or borealis_save["output"]["path"] is None:
+            raise RuntimeError(f"Async job did not save both adapters: {json.dumps(job, sort_keys=True)}")
         print("job=" + json.dumps(job, sort_keys=True))
     else:
         for _ in range(args.steps):
@@ -233,6 +248,8 @@ def main() -> None:
         )
     atlas_state = get_json(args.base_url, f"/runs/{atlas['run_id']}")
     borealis_state = get_json(args.base_url, f"/runs/{borealis['run_id']}")
+    require_ready_run(atlas_state, "atlas")
+    require_ready_run(borealis_state, "borealis")
     atlas_after = sample(args.base_url, atlas["run_id"], atlas_prompt, args.max_new_tokens)
     borealis_after = sample(args.base_url, borealis["run_id"], borealis_prompt, args.max_new_tokens)
 

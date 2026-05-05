@@ -273,6 +273,14 @@ class WorkerOperationsResponse(BaseModel):
     operation_count: int = 0
 
 
+class WorkerReconcileResponse(BaseModel):
+    """Result from reconciling resident runs with supervised workers."""
+
+    reassigned_run_ids: list[str] = Field(default_factory=list)
+    reattached_run_ids: list[str] = Field(default_factory=list)
+    workers: list[WorkerProcessRecord] = Field(default_factory=list)
+
+
 def _datum_from_request(request: DatumRequest) -> Datum:
     loss_fn_inputs = dict(request.loss_fn_inputs)
     target_tokens = loss_fn_inputs.get("target_tokens")
@@ -603,24 +611,63 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"Unknown worker_id: {worker_id}")
         return worker
 
-    def attach_run_to_worker(record: RunRecord) -> None:
+    def attach_run_to_worker(record: RunRecord, *, reason: Optional[str] = None) -> None:
         if worker_manager is None or record.worker_id is None:
             return
         worker_manager.attach_run(record.worker_id, _model_to_dict(record))
+        if reason is not None:
+            worker_manager.record_operation(
+                record.worker_id,
+                operation="reattach_run",
+                run_ids=[record.run_id],
+                payload={"reason": reason},
+            )
 
-    def reattach_runs_to_worker(worker_id: str) -> None:
+    def reattach_runs_to_worker(worker_id: str, *, reason: str) -> list[str]:
         if worker_manager is None:
-            return
+            return []
         with records_lock:
             assigned_records = [
                 record for run_id, record in records.items() if run_id in runs and record.worker_id == worker_id
             ]
         for record in assigned_records:
-            attach_run_to_worker(record)
+            attach_run_to_worker(record, reason=reason)
+        return [record.run_id for record in assigned_records]
 
-    def reattach_runs_to_workers(worker_ids: list[str]) -> None:
+    def reattach_runs_to_workers(worker_ids: list[str], *, reason: str) -> list[str]:
+        reattached_run_ids = []
         for worker_id in worker_ids:
-            reattach_runs_to_worker(worker_id)
+            reattached_run_ids.extend(reattach_runs_to_worker(worker_id, reason=reason))
+        return reattached_run_ids
+
+    def reconcile_worker_assignments(*, reason: str) -> WorkerReconcileResponse:
+        if worker_manager is None:
+            return WorkerReconcileResponse()
+        worker_records = worker_manager.snapshot()
+        running_worker_ids = {record.worker_id for record in worker_records if record.status == "running"}
+        reassigned_run_ids = []
+        dirty_records = False
+        with records_lock:
+            resident_records = [record for run_id, record in records.items() if run_id in runs]
+            for record in resident_records:
+                if record.worker_id in running_worker_ids:
+                    continue
+                assigned_worker = worker_manager.assign(record.run_id)
+                if assigned_worker is None:
+                    continue
+                record.worker_id = assigned_worker.worker_id
+                record.updated_at = _utc_now()
+                reassigned_run_ids.append(record.run_id)
+                dirty_records = True
+            if dirty_records:
+                run_store.save(records)
+            worker_ids = sorted({record.worker_id for record in resident_records if record.worker_id is not None})
+        reattached_run_ids = reattach_runs_to_workers(worker_ids, reason=reason)
+        return WorkerReconcileResponse(
+            reassigned_run_ids=reassigned_run_ids,
+            reattached_run_ids=reattached_run_ids,
+            workers=worker_manager.snapshot(),
+        )
 
     def record_worker_operation(operation: str, run_ids: list[str], payload: Optional[dict[str, Any]] = None) -> None:
         if worker_manager is None:
@@ -651,22 +698,36 @@ def create_app(
                         record.adapter_id = client.adapter_id
                         record.updated_at = _utc_now()
                         dirty_records = True
-                attach_run_to_worker(record)
+                attach_run_to_worker(record, reason="startup")
             if dirty_records:
                 run_store.save(records)
 
     app.state.executor = executor
     app.state.worker_manager = worker_manager
     app.state.reattach_runs_to_workers = reattach_runs_to_workers
+    app.state.reconcile_worker_assignments = reconcile_worker_assignments
 
     @app.get("/health")
     def health() -> dict[str, Any]:
+        status_counts: dict[str, int] = {}
+        stale_worker_run_ids = []
+        worker_records = worker_manager.snapshot() if worker_manager is not None else []
+        running_worker_ids = {record.worker_id for record in worker_records if record.status == "running"}
+        with records_lock:
+            for run_id, record in records.items():
+                status_counts[record.status] = status_counts.get(record.status, 0) + 1
+                if run_id in runs and worker_manager is not None and record.worker_id not in running_worker_ids:
+                    stale_worker_run_ids.append(run_id)
         return {
             "status": "ok",
             "base_model": base_model,
             "num_runs": len(runs),
             "num_records": len(records),
             "mode": "mixed_lora_single_process",
+            "model_execution": "api_process",
+            "run_status_counts": status_counts,
+            "stale_worker_run_ids": stale_worker_run_ids,
+            "worker_assignment_ready": worker_manager is None or not stale_worker_run_ids,
             "queue_depth": executor.queue_depth(),
             "worker_alive": executor.is_alive(),
             "run_store": str(run_store.path),
@@ -684,7 +745,7 @@ def create_app(
             "worker_processes": worker_processes,
             "workers": [
                 _model_to_dict(record) if isinstance(record, BaseModel) else asdict(record)
-                for record in (worker_manager.snapshot() if worker_manager is not None else [])
+                for record in worker_records
             ],
         }
 
@@ -699,8 +760,14 @@ def create_app(
         if worker_manager is None:
             return []
         restarted = worker_manager.restart_dead()
-        reattach_runs_to_workers([record.worker_id for record in restarted])
+        reattach_runs_to_workers([record.worker_id for record in restarted], reason="worker_restart")
         return [get_worker_record(record.worker_id) for record in restarted]
+
+    @app.post("/workers/reconcile", response_model=WorkerReconcileResponse)
+    def reconcile_workers() -> WorkerReconcileResponse:
+        if worker_manager is None:
+            return WorkerReconcileResponse()
+        return reconcile_worker_assignments(reason="manual_reconcile")
 
     @app.post("/workers/{worker_id}/ping", response_model=WorkerCommandResponse)
     def ping_worker(worker_id: str) -> WorkerCommandResponse:

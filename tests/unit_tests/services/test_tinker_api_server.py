@@ -136,6 +136,10 @@ def test_mixed_lora_server_reports_supervised_worker_processes(monkeypatch, tmp_
         worker_operations = client.get(f"/workers/{created['worker_id']}/operations").json()
 
         assert health["worker_processes"] == 2
+        assert health["model_execution"] == "api_process"
+        assert health["worker_assignment_ready"] is True
+        assert health["stale_worker_run_ids"] == []
+        assert health["run_status_counts"] == {}
         assert len(health["workers"]) == 2
         assert len(workers) == 2
         assert {worker["status"] for worker in workers} == {"running"}
@@ -199,16 +203,44 @@ def test_mixed_lora_server_reattaches_runs_after_worker_restart(monkeypatch, tmp
         manager = app.state.worker_manager
         manager._slots[worker_id].process.terminate()
         manager._slots[worker_id].process.join(timeout=5.0)
+        unhealthy = client.get("/health").json()
 
         restarted = client.post("/workers/restart_dead").json()
         after = client.get(f"/workers/{worker_id}/runs").json()
 
         assert before["assigned_run_count"] == 1
+        assert unhealthy["worker_assignment_ready"] is False
+        assert unhealthy["stale_worker_run_ids"] == [created["run_id"]]
         assert restarted[0]["worker_id"] == worker_id
         assert restarted[0]["restarts"] == 1
         assert restarted[0]["assigned_run_count"] == 1
         assert after["assigned_run_count"] == 1
         assert after["runs"][0]["run_id"] == created["run_id"]
+        operations = client.get(f"/workers/{worker_id}/operations").json()
+        assert operations["operations"][0]["operation"] == "reattach_run"
+        assert operations["operations"][0]["payload"] == {"reason": "worker_restart"}
+
+
+def test_mixed_lora_server_reconciles_stale_worker_assignments(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, worker_processes=1)
+    with fastapi_testclient.TestClient(app) as client:
+        created = client.post("/runs", json={"name": "placed"}).json()
+        run_id = created["run_id"]
+        worker_id = created["worker_id"]
+        record = client.get(f"/runs/{run_id}").json()
+        assert record["worker_id"] == worker_id
+        # Simulate metadata drift without killing the worker.
+        app.state.worker_manager.detach_run(worker_id, run_id)
+        reconciled = client.post("/workers/reconcile").json()
+        worker_runs = client.get(f"/workers/{worker_id}/runs").json()
+        operations = client.get(f"/workers/{worker_id}/operations").json()
+
+        assert reconciled["reattached_run_ids"] == [run_id]
+        assert worker_runs["assigned_run_count"] == 1
+        assert worker_runs["runs"][0]["run_id"] == run_id
+        assert operations["operations"][-1]["operation"] == "reattach_run"
+        assert operations["operations"][-1]["payload"] == {"reason": "manual_reconcile"}
 
 
 def test_mixed_lora_server_restores_run_metadata(monkeypatch, tmp_path):
