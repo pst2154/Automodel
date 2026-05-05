@@ -227,6 +227,9 @@ class RLJobRequest(BaseModel):
     launcher: RLLauncher = "local"
     runner: RLRunner = "uv"
     docker_repo_dir: Optional[str] = None
+    docker_container_repo_dir: str = "/opt/nemo-rl"
+    docker_hf_cache_dir: Optional[str] = None
+    docker_container_hf_cache_dir: str = "/root/.cache/huggingface"
     docker_user: Optional[str] = None
     container_image: str = "nvcr.io/nvidia/nemo-rl:v0.6.0"
     run_async: bool = True
@@ -464,10 +467,9 @@ def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str
     if request.launcher == "local":
         runner_prefix = ["uv", "run", "python", "-u"] if request.runner == "uv" else ["python", "-u"]
         return [*runner_prefix, str(entrypoint), "--config", str(config_path), *request.overrides]
-    container_repo = "/workspace/RL"
+    container_repo = request.docker_container_repo_dir.rstrip("/") or "/opt/nemo-rl"
     container_entrypoint = str(pathlib.PurePosixPath(container_repo) / request.entrypoint)
     container_config = str(pathlib.PurePosixPath(container_repo) / request.config_path)
-    docker_repo_dir = request.docker_repo_dir or str(repo_dir)
     command = [
         "docker",
         "run",
@@ -485,10 +487,24 @@ def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str
         if request.runner == "uv"
         else ["/opt/nemo_rl_venv/bin/python", "-u"]
     )
+    if request.docker_repo_dir:
+        command.extend(["-v", f"{request.docker_repo_dir}:{container_repo}"])
+    if request.docker_hf_cache_dir:
+        container_cache = request.docker_container_hf_cache_dir.rstrip("/") or "/root/.cache/huggingface"
+        command.extend(
+            [
+                "-v",
+                f"{request.docker_hf_cache_dir}:{container_cache}",
+                "-e",
+                f"HF_HOME={container_cache}",
+                "-e",
+                f"HF_HUB_CACHE={container_cache}/hub",
+                "-e",
+                f"HF_DATASETS_CACHE={container_cache}/datasets",
+            ]
+        )
     command.extend(
         [
-            "-v",
-            f"{docker_repo_dir}:{container_repo}",
             "-w",
             container_repo,
             request.container_image,

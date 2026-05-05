@@ -238,8 +238,7 @@ curl -s http://127.0.0.1:18080/rl/jobs \
   -d '{
     "name": "grpo-smoke",
     "repo_dir": "/workspace/RL",
-    "docker_repo_dir": "/home/scratch.asteiner/RL",
-    "docker_user": "140045:30",
+    "docker_container_repo_dir": "/opt/nemo-rl",
     "launcher": "docker",
     "runner": "python",
     "container_image": "nvcr.io/nvidia/nemo-rl:v0.6.0",
@@ -255,7 +254,8 @@ curl -s http://127.0.0.1:18080/rl/jobs \
       "policy.train_micro_batch_size=1",
       "policy.generation_batch_size=2",
       "checkpointing.enabled=false",
-      "logger.wandb_enabled=false"
+      "logger.wandb_enabled=false",
+      "logger.log_dir=/tmp/nvidia-tinker-rl-smoke"
     ]
   }'
 ```
@@ -301,13 +301,23 @@ NeMo-RL container, switch that recipe to the non-Triton LoRA path before testing
 larger configs.
 
 When the bridge runs from inside the NVIDIA Tinker container, mount the Docker
-socket and pass both paths:
+socket. For the V1 smoke path, let the nested NeMo-RL container use its bundled
+checkout at `/opt/nemo-rl`; this avoids shadowing container dependencies with a
+host checkout that may be missing submodules.
 
 - `repo_dir`: path as seen inside the Tinker container, for validation.
-- `docker_repo_dir`: path as seen by the host Docker daemon, for the nested
-  NeMo-RL container mount.
-- `docker_user`: host uid/gid for scratch writes when NFS root-squash prevents
-  root in the nested container from writing editable package metadata.
+- `docker_container_repo_dir`: path inside the nested NeMo-RL container. The
+  default is `/opt/nemo-rl`.
+- `docker_repo_dir`: optional path as seen by the host Docker daemon. Only set
+  this when intentionally testing a host NeMo-RL checkout, because mounting it
+  over `/opt/nemo-rl` can hide container-bundled submodules.
+- `docker_hf_cache_dir`: optional path as seen by the host Docker daemon for
+  persistent Hugging Face model and dataset caches. The directory must be
+  writable by the nested container user. On root-squashed NFS scratch, create a
+  dedicated writable cache directory before enabling this.
+- `docker_user`: optional host uid/gid. Do not set it for the stock NeMo-RL
+  container because its venv Python resolves through `/root`, which is not
+  executable by arbitrary scratch UIDs.
 
 Start a localhost-only Nemotron HTTP server on `4u8g-gen-0277` with:
 

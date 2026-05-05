@@ -171,6 +171,7 @@ def test_mixed_lora_server_prepares_nemo_rl_docker_command(monkeypatch, tmp_path
             "launcher": "docker",
             "container_image": "nvcr.io/nvidia/nemo-rl:v0.6.0",
             "docker_repo_dir": "/host/RL",
+            "docker_container_repo_dir": "/workspace/RL",
             "docker_user": "140045:30",
             "runner": "python",
             "dry_run": True,
@@ -191,6 +192,61 @@ def test_mixed_lora_server_prepares_nemo_rl_docker_command(monkeypatch, tmp_path
     assert "grpo.max_num_steps=2" in job["command"]
     assert client.get("/rl/jobs").json()[0]["job_id"] == job["job_id"]
     assert client.get(f"/rl/jobs/{job['job_id']}/logs").json()["text"] == ""
+
+
+def test_mixed_lora_server_prepares_container_native_nemo_rl_docker_command(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    rl_repo = tmp_path / "RL"
+    (rl_repo / "examples" / "configs").mkdir(parents=True)
+    (rl_repo / "examples" / "run_grpo.py").write_text("print('not launched')\n", encoding="utf-8")
+    (rl_repo / "examples" / "configs" / "grpo_math_1B.yaml").write_text("grpo: {}\n", encoding="utf-8")
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, rl_repo_dir=str(rl_repo))
+    client = fastapi_testclient.TestClient(app)
+
+    response = client.post(
+        "/rl/jobs",
+        json={
+            "name": "dry-run",
+            "launcher": "docker",
+            "runner": "python",
+            "dry_run": True,
+            "overrides": ["logger.log_dir=/tmp/nvidia-tinker-rl-smoke"],
+        },
+    ).json()
+
+    command = response["job"]["command"]
+    assert "-v" not in command
+    assert "-w" in command
+    assert command[command.index("-w") + 1] == "/opt/nemo-rl"
+    assert "/opt/nemo-rl/examples/run_grpo.py" in command
+    assert "/opt/nemo-rl/examples/configs/grpo_math_1B.yaml" in command
+
+
+def test_mixed_lora_server_prepares_nemo_rl_docker_cache_mount(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    rl_repo = tmp_path / "RL"
+    (rl_repo / "examples" / "configs").mkdir(parents=True)
+    (rl_repo / "examples" / "run_grpo.py").write_text("print('not launched')\n", encoding="utf-8")
+    (rl_repo / "examples" / "configs" / "grpo_math_1B.yaml").write_text("grpo: {}\n", encoding="utf-8")
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, rl_repo_dir=str(rl_repo))
+    client = fastapi_testclient.TestClient(app)
+
+    response = client.post(
+        "/rl/jobs",
+        json={
+            "name": "dry-run",
+            "launcher": "docker",
+            "runner": "python",
+            "dry_run": True,
+            "docker_hf_cache_dir": "/host/hf",
+        },
+    ).json()
+
+    command = response["job"]["command"]
+    assert "/host/hf:/root/.cache/huggingface" in command
+    assert "HF_HOME=/root/.cache/huggingface" in command
+    assert "HF_HUB_CACHE=/root/.cache/huggingface/hub" in command
+    assert "HF_DATASETS_CACHE=/root/.cache/huggingface/datasets" in command
 
 
 def test_mixed_lora_server_runs_local_nemo_rl_bridge_job(monkeypatch, tmp_path):

@@ -510,14 +510,21 @@ Answer:</textarea></label>
             <label>RL repo dir<input id="rl-repo" value="/Users/asteiner/Documents/Git_Repos/RL" /></label>
             <label>Config path<input id="rl-config" value="examples/configs/grpo_math_1B.yaml" /></label>
           </div>
-          <label>Docker host RL repo dir<input id="rl-docker-repo" value="/home/scratch.asteiner/RL" /></label>
+          <div class="two">
+            <label>Docker host RL repo dir<input id="rl-docker-repo" value="" placeholder="optional: /home/scratch.asteiner/RL" /></label>
+            <label>Docker container RL dir<input id="rl-docker-container-repo" value="/opt/nemo-rl" /></label>
+          </div>
+          <div class="two">
+            <label>Docker HF cache dir<input id="rl-docker-hf-cache" value="" placeholder="optional writable cache dir" /></label>
+            <label>Container HF cache dir<input id="rl-docker-container-hf-cache" value="/root/.cache/huggingface" /></label>
+          </div>
           <div class="four">
-            <label>Launcher<select id="rl-launcher"><option value="local">local</option><option value="docker">docker</option></select></label>
+            <label>Launcher<select id="rl-launcher"><option value="docker">docker</option><option value="local">local</option></select></label>
             <label>Runner<select id="rl-runner"><option value="python">python</option><option value="uv">uv</option></select></label>
             <label>Container image<input id="rl-image" value="nvcr.io/nvidia/nemo-rl:v0.6.0" /></label>
             <label>Job name<input id="rl-name" value="grpo-smoke" /></label>
           </div>
-          <label>Docker user<input id="rl-docker-user" value="140045:30" /></label>
+          <label>Docker user<input id="rl-docker-user" value="" placeholder="optional: 140045:30" /></label>
           <label>Hydra overrides<textarea id="rl-overrides">policy.dtensor_cfg.lora_cfg.enabled=true
 policy.dtensor_cfg.lora_cfg.dim=8
 policy.dtensor_cfg.lora_cfg.use_triton=false
@@ -528,7 +535,8 @@ policy.train_global_batch_size=2
 policy.train_micro_batch_size=1
 policy.generation_batch_size=2
 checkpointing.enabled=false
-logger.wandb_enabled=false</textarea></label>
+logger.wandb_enabled=false
+logger.log_dir=/tmp/nvidia-tinker-rl-smoke</textarea></label>
           <div class="big-actions">
             <button id="rl-dry-run" class="blue">Show RL Command</button>
             <button id="rl-launch" class="primary">Launch RL Job</button>
@@ -716,6 +724,10 @@ logger.wandb_enabled=false</textarea></label>
           runner: $("rl-runner").value,
           container_image: $("rl-image").value.trim(),
           docker_repo_dir: $("rl-docker-repo").value.trim() || null,
+          docker_container_repo_dir: $("rl-docker-container-repo").value.trim() || "/opt/nemo-rl",
+          docker_hf_cache_dir: $("rl-docker-hf-cache").value.trim() || null,
+          docker_container_hf_cache_dir:
+            $("rl-docker-container-hf-cache").value.trim() || "/root/.cache/huggingface",
           docker_user: $("rl-docker-user").value.trim() || null,
           dry_run: dryRun,
           run_async: true,
