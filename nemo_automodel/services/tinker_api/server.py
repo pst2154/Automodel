@@ -480,6 +480,7 @@ def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str
     ]
     if request.docker_user:
         command.extend(["--user", request.docker_user])
+    runner_prefix = ["uv", "run", "python", "-u"] if request.runner == "uv" else ["python", "-u"]
     command.extend(
         [
             "-v",
@@ -487,10 +488,7 @@ def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str
             "-w",
             container_repo,
             request.container_image,
-            "uv",
-            "run",
-            "python",
-            "-u",
+            *runner_prefix,
             container_entrypoint,
             "--config",
             container_config,

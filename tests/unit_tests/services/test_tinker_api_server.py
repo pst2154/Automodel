@@ -172,6 +172,7 @@ def test_mixed_lora_server_prepares_nemo_rl_docker_command(monkeypatch, tmp_path
             "container_image": "nvcr.io/nvidia/nemo-rl:v0.6.0",
             "docker_repo_dir": "/host/RL",
             "docker_user": "140045:30",
+            "runner": "python",
             "dry_run": True,
             "overrides": ["grpo.max_num_steps=2", "policy.dtensor_cfg.lora_cfg.enabled=true"],
         },
@@ -185,6 +186,7 @@ def test_mixed_lora_server_prepares_nemo_rl_docker_command(monkeypatch, tmp_path
     assert "140045:30" in job["command"]
     assert "/host/RL:/workspace/RL" in job["command"]
     assert "nvcr.io/nvidia/nemo-rl:v0.6.0" in job["command"]
+    assert "uv" not in job["command"]
     assert "grpo.max_num_steps=2" in job["command"]
     assert client.get("/rl/jobs").json()[0]["job_id"] == job["job_id"]
     assert client.get(f"/rl/jobs/{job['job_id']}/logs").json()["text"] == ""

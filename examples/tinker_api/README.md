@@ -241,6 +241,7 @@ curl -s http://127.0.0.1:18080/rl/jobs \
     "docker_repo_dir": "/home/scratch.asteiner/RL",
     "docker_user": "140045:30",
     "launcher": "docker",
+    "runner": "python",
     "container_image": "nvcr.io/nvidia/nemo-rl:v0.6.0",
     "dry_run": true,
     "overrides": [
