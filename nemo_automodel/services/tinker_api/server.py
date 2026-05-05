@@ -882,11 +882,15 @@ def create_app(
         prompt_tokens = service.tokenizer.encode(request.prompt, add_special_tokens=True)
         completion_tokens = service.tokenizer.encode(request.completion, add_special_tokens=False)
         tokens = (prompt_tokens + completion_tokens)[: request.max_tokens]
-        prompt_length = min(len(prompt_tokens), len(tokens))
-        weights = [0.0] * prompt_length + [1.0] * max(0, len(tokens) - prompt_length)
+        if len(tokens) < 2:
+            raise HTTPException(status_code=400, detail="Text SFT datum needs at least two tokens")
+        input_tokens = tokens[:-1]
+        target_tokens = tokens[1:]
+        first_completion_label = max(0, min(len(prompt_tokens), len(tokens)) - 1)
+        weights = [0.0] * first_completion_label + [1.0] * max(0, len(target_tokens) - first_completion_label)
         return DatumRequest(
-            model_input=ModelInputRequest(tokens=tokens),
-            loss_fn_inputs={"target_tokens": {"tokens": tokens}, "weights": weights},
+            model_input=ModelInputRequest(tokens=input_tokens),
+            loss_fn_inputs={"target_tokens": {"tokens": target_tokens}, "weights": weights},
         )
 
     @app.get("/workers", response_model=list[WorkerProcessRecord])

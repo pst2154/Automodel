@@ -167,9 +167,11 @@ def test_mixed_lora_server_tokenizes_text_sft_datum(monkeypatch, tmp_path):
     datum = response.json()
     weights = datum["loss_fn_inputs"]["weights"]
     target_tokens = datum["loss_fn_inputs"]["target_tokens"]["tokens"]
+    input_tokens = datum["model_input"]["tokens"]
     assert response.status_code == 200
-    assert datum["model_input"]["tokens"] == target_tokens
+    assert input_tokens[1:] == target_tokens[:-1]
     assert len(weights) == len(target_tokens)
+    assert len(input_tokens) == len(target_tokens)
     assert 0.0 in weights
     assert 1.0 in weights
 
