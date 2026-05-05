@@ -6,15 +6,15 @@
     <title>Async LoRA Training Demo</title>
     <style>
       :root {
-        --bg: #090b10;
-        --panel: #111822;
-        --panel-2: #172232;
-        --ink: #f4f7fb;
-        --muted: #8fa0b5;
-        --green: #60d394;
-        --blue: #5da8ff;
-        --gold: #ffd166;
-        --red: #ff6b6b;
+        --bg: #050607;
+        --panel: #101418;
+        --panel-2: #171c21;
+        --ink: #f4f7f2;
+        --muted: #9aa39a;
+        --green: #76b900;
+        --blue: #43a2ff;
+        --gold: #c6ff00;
+        --red: #ff5f57;
         --line: rgba(255, 255, 255, 0.16);
       }
 
@@ -27,9 +27,12 @@
         min-height: 100vh;
         color: var(--ink);
         background:
-          radial-gradient(circle at 12% 12%, rgba(93, 168, 255, 0.16), transparent 30%),
-          radial-gradient(circle at 78% 8%, rgba(96, 211, 148, 0.12), transparent 26%),
-          linear-gradient(135deg, #080a0f, #10151f 58%, #080a0f);
+          linear-gradient(90deg, rgba(118, 185, 0, 0.05) 1px, transparent 1px),
+          linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+          radial-gradient(circle at 12% 12%, rgba(118, 185, 0, 0.2), transparent 30%),
+          radial-gradient(circle at 78% 8%, rgba(67, 162, 255, 0.1), transparent 26%),
+          linear-gradient(135deg, #050607, #11161b 58%, #050607);
+        background-size: 42px 42px, 42px 42px, auto, auto, auto;
         font-family: Avenir Next, Segoe UI, sans-serif;
       }
 
@@ -59,7 +62,7 @@
         border-radius: 10px;
         padding: 10px 14px;
         color: var(--ink);
-        background: var(--panel-2);
+        background: linear-gradient(180deg, #22282f, #15191e);
         cursor: pointer;
         font-weight: 800;
       }
@@ -75,7 +78,7 @@
       .side {
         border: 1px solid var(--line);
         border-radius: 18px;
-        background: rgba(17, 24, 34, 0.78);
+        background: rgba(16, 20, 24, 0.84);
         box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
       }
 
@@ -101,11 +104,11 @@
         height: 230px;
         display: grid;
         place-items: center;
-        border: 2px solid rgba(96, 211, 148, 0.75);
+        border: 2px solid rgba(118, 185, 0, 0.78);
         border-radius: 50%;
-        background: radial-gradient(circle, rgba(96, 211, 148, 0.24), rgba(17, 24, 34, 0.94));
+        background: radial-gradient(circle, rgba(118, 185, 0, 0.26), rgba(16, 20, 24, 0.96));
         transform: translate(-50%, -50%);
-        box-shadow: 0 0 60px rgba(96, 211, 148, 0.28);
+        box-shadow: 0 0 60px rgba(118, 185, 0, 0.28);
         text-align: center;
       }
 
@@ -187,7 +190,7 @@
 
       .done {
         border-color: var(--green);
-        background: rgba(96, 211, 148, 0.12);
+        background: rgba(118, 185, 0, 0.14);
         opacity: 1;
       }
 
@@ -205,6 +208,19 @@
 
       .side {
         padding: 18px;
+      }
+
+      .brand {
+        display: inline-flex;
+        width: fit-content;
+        margin-bottom: 12px;
+        border-radius: 999px;
+        padding: 5px 10px;
+        color: #081006;
+        background: var(--green);
+        font-size: 12px;
+        font-weight: 900;
+        text-transform: uppercase;
       }
 
       .timeline {
@@ -305,6 +321,7 @@
   <body>
     <header>
       <div>
+        <span class="brand">NVIDIA CompLab</span>
         <h1>Async LoRA Arrivals</h1>
         <p>One resident base model. LoRA jobs arrive now, soon, and later.</p>
       </div>
@@ -327,6 +344,7 @@
       </section>
 
       <aside class="side">
+        <span class="brand">NVIDIA</span>
         <h2>What The Demo Shows</h2>
         <div class="timeline">
           <div id="event-1" class="event">1. Client sends LoRA A and its dataset.</div>
