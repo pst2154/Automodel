@@ -42,6 +42,7 @@
 
       button,
       input,
+      select,
       textarea {
         font: inherit;
       }
@@ -86,6 +87,7 @@
       }
 
       input,
+      select,
       textarea {
         width: 100%;
         min-height: 42px;
@@ -277,6 +279,12 @@
         gap: 12px;
       }
 
+      .four {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
       .adapter {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -390,7 +398,8 @@
         }
 
         .top,
-        .three {
+        .three,
+        .four {
           grid-template-columns: 1fr;
         }
       }
@@ -490,6 +499,36 @@ Answer:</textarea></label>
           </details>
         </div>
       </section>
+
+      <section>
+        <div class="section-head">
+          <h2>NeMo-RL Bridge</h2>
+          <span class="tiny">Launch or dry-run GRPO from the NVIDIA Tinker UI.</span>
+        </div>
+        <div class="body">
+          <div class="two">
+            <label>RL repo dir<input id="rl-repo" value="/Users/asteiner/Documents/Git_Repos/RL" /></label>
+            <label>Config path<input id="rl-config" value="examples/configs/grpo_math_1B.yaml" /></label>
+          </div>
+          <div class="four">
+            <label>Launcher<select id="rl-launcher"><option value="local">local</option><option value="docker">docker</option></select></label>
+            <label>Runner<select id="rl-runner"><option value="uv">uv</option><option value="python">python</option></select></label>
+            <label>Container image<input id="rl-image" value="nvcr.io/nvidia/nemo-rl:v0.6.0" /></label>
+            <label>Job name<input id="rl-name" value="grpo-smoke" /></label>
+          </div>
+          <label>Hydra overrides<textarea id="rl-overrides">policy.dtensor_cfg.lora_cfg.enabled=true
+policy.dtensor_cfg.lora_cfg.dim=8
+grpo.max_num_steps=2
+logger.wandb_enabled=false</textarea></label>
+          <div class="big-actions">
+            <button id="rl-dry-run" class="blue">Show RL Command</button>
+            <button id="rl-launch" class="primary">Launch RL Job</button>
+            <button id="rl-refresh">Refresh RL</button>
+            <button id="rl-logs">Show Logs</button>
+          </div>
+          <pre id="rl-output" class="sample">RL job status appears here.</pre>
+        </div>
+      </section>
     </main>
 
     <div id="toast" class="toast"></div>
@@ -499,6 +538,7 @@ Answer:</textarea></label>
         health: null,
         runs: [],
         jobs: [],
+        rlJobs: [],
         metrics: null,
         toastTimer: null,
         busy: null,
@@ -639,15 +679,82 @@ Answer:</textarea></label>
         $("sample-both").disabled = disabled || !hasBoth;
         $("save-both").disabled = disabled || !hasBoth;
         $("detach-both").disabled = disabled || !hasBoth;
+        $("rl-dry-run").disabled = disabled;
+        $("rl-launch").disabled = disabled;
+        $("rl-refresh").disabled = disabled;
+        $("rl-logs").disabled = disabled || state.rlJobs.length === 0;
       }
 
       async function refresh() {
         if (state.busy) return;
         state.health = await call("/health", {}, false);
+        if (state.health.rl_repo_dir && $("rl-repo").value === "/Users/asteiner/Documents/Git_Repos/RL") {
+          $("rl-repo").value = state.health.rl_repo_dir;
+        }
         state.runs = await call("/runs");
         state.jobs = await call("/jobs");
+        state.rlJobs = await call("/rl/jobs");
         state.metrics = await call("/metrics", {}, false);
         render();
+      }
+
+      function rlPayload(dryRun) {
+        return {
+          name: $("rl-name").value.trim() || null,
+          repo_dir: $("rl-repo").value.trim() || null,
+          config_path: $("rl-config").value.trim(),
+          launcher: $("rl-launcher").value,
+          runner: $("rl-runner").value,
+          container_image: $("rl-image").value.trim(),
+          dry_run: dryRun,
+          run_async: true,
+          overrides: $("rl-overrides").value.split(/\n+/).map((line) => line.trim()).filter(Boolean),
+        };
+      }
+
+      function latestRlJob() {
+        return state.rlJobs[state.rlJobs.length - 1];
+      }
+
+      async function refreshRlOutput(jobId = null) {
+        state.rlJobs = await call("/rl/jobs");
+        const job = jobId ? state.rlJobs.find((item) => item.job_id === jobId) : latestRlJob();
+        if (!job) {
+          $("rl-output").textContent = "No RL jobs yet.";
+          render();
+          return null;
+        }
+        $("rl-output").textContent = JSON.stringify(job, null, 2);
+        render();
+        return job;
+      }
+
+      async function submitRlJob(dryRun) {
+        setBusy("rl", dryRun ? "Preparing..." : "Launching...", dryRun ? "rl-dry-run" : "rl-launch");
+        try {
+          const response = await call("/rl/jobs", { method: "POST", body: JSON.stringify(rlPayload(dryRun)) });
+          raw(response);
+          $("rl-output").textContent = `${response.job.command.join(" ")}\n\n${JSON.stringify(response.job, null, 2)}`;
+          toast(dryRun ? "RL command prepared." : "RL job launched.");
+          if (!dryRun) {
+            let job = response.job;
+            while (["queued", "running"].includes(job.status)) {
+              await new Promise((resolve) => setTimeout(resolve, 1200));
+              job = await call(`/rl/jobs/${job.job_id}`);
+              $("rl-output").textContent = JSON.stringify(job, null, 2);
+            }
+          }
+          await refreshRlOutput(response.job.job_id);
+        } finally {
+          clearBusy();
+        }
+      }
+
+      async function showRlLogs() {
+        const job = latestRlJob();
+        if (!job) throw new Error("No RL job selected.");
+        const logs = await call(`/rl/jobs/${job.job_id}/logs?tail_bytes=50000`);
+        $("rl-output").textContent = logs.text || "No logs yet.";
       }
 
       async function createMissing() {
@@ -817,6 +924,10 @@ Answer:</textarea></label>
       });
       $("save-both").onclick = () => handle(saveBoth);
       $("detach-both").onclick = () => handle(detachBoth);
+      $("rl-dry-run").onclick = () => handle(() => submitRlJob(true));
+      $("rl-launch").onclick = () => handle(() => submitRlJob(false));
+      $("rl-refresh").onclick = () => handle(() => refreshRlOutput());
+      $("rl-logs").onclick = () => handle(showRlLogs);
 
       refresh().catch((error) => toast(error.message, true));
       setInterval(() => refresh().catch(() => {}), 5000);

@@ -150,8 +150,74 @@ def test_mixed_lora_server_serves_operator_ui(monkeypatch, tmp_path):
     response = client.get("/ui")
 
     assert response.status_code == 200
-    assert "Nemotron-Tinker" in response.text
+    assert "NVIDIA Tinker" in response.text
     assert 'id="create-run"' in response.text
+    assert 'id="rl-launch"' in response.text
+
+
+def test_mixed_lora_server_prepares_nemo_rl_docker_command(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    rl_repo = tmp_path / "RL"
+    (rl_repo / "examples" / "configs").mkdir(parents=True)
+    (rl_repo / "examples" / "run_grpo.py").write_text("print('not launched')\n", encoding="utf-8")
+    (rl_repo / "examples" / "configs" / "grpo_math_1B.yaml").write_text("grpo: {}\n", encoding="utf-8")
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, rl_repo_dir=str(rl_repo))
+    client = fastapi_testclient.TestClient(app)
+
+    response = client.post(
+        "/rl/jobs",
+        json={
+            "name": "dry-run",
+            "launcher": "docker",
+            "container_image": "nvcr.io/nvidia/nemo-rl:v0.6.0",
+            "dry_run": True,
+            "overrides": ["grpo.max_num_steps=2", "policy.dtensor_cfg.lora_cfg.enabled=true"],
+        },
+    ).json()
+
+    job = response["job"]
+    assert job["status"] == "dry_run"
+    assert job["launcher"] == "docker"
+    assert job["command"][:2] == ["docker", "run"]
+    assert "nvcr.io/nvidia/nemo-rl:v0.6.0" in job["command"]
+    assert "grpo.max_num_steps=2" in job["command"]
+    assert client.get("/rl/jobs").json()[0]["job_id"] == job["job_id"]
+    assert client.get(f"/rl/jobs/{job['job_id']}/logs").json()["text"] == ""
+
+
+def test_mixed_lora_server_runs_local_nemo_rl_bridge_job(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    rl_repo = tmp_path / "RL"
+    (rl_repo / "examples" / "configs").mkdir(parents=True)
+    (rl_repo / "examples" / "run_grpo.py").write_text(
+        "import argparse\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--config')\n"
+        "args, overrides = parser.parse_known_args()\n"
+        "print('config=' + args.config)\n"
+        "print('overrides=' + ','.join(overrides))\n",
+        encoding="utf-8",
+    )
+    (rl_repo / "examples" / "configs" / "grpo_math_1B.yaml").write_text("grpo: {}\n", encoding="utf-8")
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, rl_repo_dir=str(rl_repo))
+    client = fastapi_testclient.TestClient(app)
+
+    response = client.post(
+        "/rl/jobs",
+        json={
+            "name": "local-smoke",
+            "runner": "python",
+            "run_async": False,
+            "overrides": ["grpo.max_num_steps=1"],
+        },
+    ).json()
+
+    job = response["job"]
+    logs = client.get(f"/rl/jobs/{job['job_id']}/logs").json()["text"]
+    assert job["status"] == "succeeded"
+    assert job["returncode"] == 0
+    assert "config=" in logs
+    assert "grpo.max_num_steps=1" in logs
 
 
 def test_mixed_lora_server_tokenizes_text_sft_datum(monkeypatch, tmp_path):

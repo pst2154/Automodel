@@ -11,14 +11,21 @@ containers, or the Nemotron-Tinker prototype on shared lab hosts.
 ## Known Host And Paths
 
 - SSH host: `4u8g-gen-0277`
+- NeMo-RL smoke-test SSH host: `alon-ts1-iec-03`
 - User scratch root: `/home/scratch.asteiner`
 - Repo checkout for GPU validation: `/home/scratch.asteiner/Automodel-kernel-test`
+- NeMo-RL checkout for bridge testing: `/home/scratch.asteiner/RL`
 - Hugging Face/cache root: `/home/scratch.asteiner/hf`
 - Checkpoint root: `/home/scratch.asteiner/checkpoints`
 - Nemotron base model:
   `/home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16`
 - Current NeMo AutoModel container:
   `nvcr.io/nvidia/nemo-automodel:26.04`
+- Current NeMo-RL container:
+  `nvcr.io/nvidia/nemo-rl:v0.6.0`
+- `alon-ts1-iec-03` is an RTX PRO 6000 Blackwell test box. Treat custom
+  Triton/kernel paths as suspect until a smoke test passes; use small GRPO
+  configs and prefer dry-run command checks first.
 
 ## Default Workflow
 
@@ -77,6 +84,23 @@ Local browser tunnel:
 
 ```bash
 ssh -f -N -L 18080:127.0.0.1:18080 -o ExitOnForwardFailure=yes 4u8g-gen-0277
+```
+
+NVIDIA Tinker to NeMo-RL bridge smoke:
+
+```bash
+ssh alon-ts1-iec-03 docker run --rm --gpus all --ipc=host --network host \
+  -v /home/scratch.asteiner/Automodel-kernel-test:/workspace/Automodel \
+  -v /home/scratch.asteiner/RL:/workspace/RL \
+  -v /home/scratch.asteiner:/home/scratch.asteiner \
+  -w /workspace/Automodel \
+  nvcr.io/nvidia/nemo-automodel:26.04 \
+  python examples/tinker_api/run_mixed_lora_server.py \
+    --base-model Qwen/Qwen3-0.6B \
+    --scratch-dir /home/scratch.asteiner/nvidia_tinker_rl \
+    --cache-dir /home/scratch.asteiner/hf \
+    --rl-repo-dir /workspace/RL \
+    --host 127.0.0.1 --port 18080
 ```
 
 ## Guardrails

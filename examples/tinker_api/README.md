@@ -28,7 +28,9 @@ What works now:
 - HTTP API for runs, mixed forward/backward, optimizer steps, saves, sampling,
   detach/unload, server-owned train jobs, async jobs, cancellation, and restart
   metadata.
-- Built-in Nemotron-Tinker operator UI at `/ui`.
+- Built-in NVIDIA Tinker operator UI at `/ui`.
+- NeMo-RL bridge endpoints for launching or dry-running GRPO jobs from a
+  mounted NeMo-RL checkout such as `/workspace/RL`.
 - Text SFT helper endpoint for tokenizing separate adapter tasks before
   training.
 - SQLite metadata by default at `$SCRATCH/tinker_api/metadata.sqlite3`.
@@ -84,6 +86,8 @@ Ignore for tomorrow:
   grouped Triton LoRA kernels.
 - `nemo_automodel/services/tinker_api/worker_manager.py`: local worker-process
   supervision and management RPC.
+- `nemo_automodel/services/tinker_api/operator_ui.html`: NVIDIA Tinker operator
+  UI with LoRA task controls and a NeMo-RL bridge panel.
 - `examples/tinker_api/run_mixed_lora_server.py`: HTTP server entry point.
 - `examples/tinker_api/api_smoke_client.py`: Qwen-oriented HTTP API client
   smoke.
@@ -191,6 +195,10 @@ POST /train_steps
 GET  /jobs
 GET  /jobs/{job_id}
 POST /jobs/{job_id}/cancel
+POST /rl/jobs
+GET  /rl/jobs
+GET  /rl/jobs/{job_id}
+GET  /rl/jobs/{job_id}/logs
 GET  /workers
 POST /workers/restart_dead
 POST /workers/reconcile
@@ -200,7 +208,7 @@ GET  /workers/{worker_id}/runs
 GET  /workers/{worker_id}/operations
 ```
 
-Open `http://127.0.0.1:18080/ui` for the Nemotron-Tinker operator UI. It is
+Open `http://127.0.0.1:18080/ui` for the NVIDIA Tinker operator UI. It is
 organized around the main loop: choose a workspace, create Atlas/Borealis
 adapters, train each adapter on its own text task, then sample and compare.
 
@@ -214,6 +222,66 @@ Authorization: Bearer <token>  # only when TINKER_API_KEY/--api-key is set
 When the tenant header is present, `/runs` and `/jobs` only return that
 tenant's resources, and run/job operations fail with `403` if the resource
 belongs to another tenant.
+
+### NeMo-RL Bridge
+
+The bridge is intentionally small. It launches a NeMo-RL recipe from a known
+checkout and records command, status, pid, return code, and logs under
+`$SCRATCH/tinker_api/rl_logs`.
+
+Dry-run a Docker command for the RTC PRO 6000 Blackwell test host:
+
+```bash
+curl -s http://127.0.0.1:18080/rl/jobs \
+  -H 'Content-Type: application/json' \
+  -H 'X-Tinker-Tenant-Id: tenant-a' \
+  -d '{
+    "name": "grpo-smoke",
+    "repo_dir": "/workspace/RL",
+    "launcher": "docker",
+    "container_image": "nvcr.io/nvidia/nemo-rl:v0.6.0",
+    "dry_run": true,
+    "overrides": [
+      "policy.dtensor_cfg.lora_cfg.enabled=true",
+      "policy.dtensor_cfg.lora_cfg.dim=8",
+      "grpo.max_num_steps=2",
+      "logger.wandb_enabled=false"
+    ]
+  }'
+```
+
+Run locally from a mounted NeMo-RL checkout when the API process has the NeMo-RL
+environment available:
+
+```bash
+curl -s http://127.0.0.1:18080/rl/jobs \
+  -H 'Content-Type: application/json' \
+  -H 'X-Tinker-Tenant-Id: tenant-a' \
+  -d '{
+    "name": "grpo-local-smoke",
+    "repo_dir": "/workspace/RL",
+    "launcher": "local",
+    "runner": "uv",
+    "run_async": true,
+    "overrides": [
+      "policy.dtensor_cfg.lora_cfg.enabled=true",
+      "policy.dtensor_cfg.lora_cfg.dim=8",
+      "grpo.max_num_steps=2",
+      "logger.wandb_enabled=false"
+    ]
+  }'
+```
+
+Then poll:
+
+```bash
+curl -s http://127.0.0.1:18080/rl/jobs/<rljob_id>
+curl -s http://127.0.0.1:18080/rl/jobs/<rljob_id>/logs
+```
+
+On Blackwell, start with short smoke runs. If Triton or LoRA kernels fail in the
+NeMo-RL container, switch that recipe to the non-Triton LoRA path before testing
+larger configs.
 
 Start a localhost-only Nemotron HTTP server on `4u8g-gen-0277` with:
 
@@ -336,10 +404,12 @@ tile.
 - Focused service suite after run detach lifecycle support: `37 passed`.
 - Focused service suite after save-and-detach lifecycle support: `38 passed`.
 - Focused service suite after service metrics support: `38 passed`.
-- Focused service suite after tenant-header scoping and Nemotron-Tinker UI:
+- Focused service suite after tenant-header scoping and NVIDIA Tinker UI:
   `41 passed`.
 - Focused service suite after task-first UI and text SFT datum endpoint:
   `42 passed`.
+- Focused server suite after NeMo-RL bridge endpoints and UI controls:
+  `30 passed` with `uv run python -m pytest tests/unit_tests/services/test_tinker_api_server.py -q`.
 - Nemotron direct mixed-LoRA smoke: passed.
 - Nemotron HTTP mixed-LoRA train/inference/save smoke: passed.
 - Nemotron HTTP restart restore smoke: passed.

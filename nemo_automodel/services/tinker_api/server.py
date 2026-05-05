@@ -19,6 +19,7 @@ import os
 import pathlib
 import queue
 import sqlite3
+import subprocess
 import threading
 import time
 import uuid
@@ -48,6 +49,8 @@ HAS_PYDANTIC, BaseModel = safe_import_from("pydantic", "BaseModel")
 _, Field = safe_import_from("pydantic", "Field")
 
 MetadataBackend = Literal["sqlite", "json"]
+RLLauncher = Literal["local", "docker"]
+RLRunner = Literal["uv", "python"]
 TENANT_HEADER = "x-tinker-tenant-id"
 
 if not HAS_PYDANTIC:  # pragma: no cover
@@ -211,6 +214,49 @@ class JobRecord(BaseModel):
     error: Optional[str] = None
     created_at: str
     updated_at: str
+
+
+class RLJobRequest(BaseModel):
+    """Launch request for a NeMo-RL recipe."""
+
+    name: Optional[str] = None
+    repo_dir: Optional[str] = None
+    config_path: str = "examples/configs/grpo_math_1B.yaml"
+    entrypoint: str = "examples/run_grpo.py"
+    overrides: list[str] = Field(default_factory=list)
+    launcher: RLLauncher = "local"
+    runner: RLRunner = "uv"
+    container_image: str = "nvcr.io/nvidia/nemo-rl:v0.6.0"
+    run_async: bool = True
+    dry_run: bool = False
+    tenant_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+
+class RLJobRecord(BaseModel):
+    """NeMo-RL launch metadata."""
+
+    job_id: str
+    name: Optional[str] = None
+    status: str
+    tenant_id: Optional[str] = None
+    launcher: RLLauncher = "local"
+    repo_dir: str
+    config_path: str
+    entrypoint: str
+    command: list[str] = Field(default_factory=list)
+    log_path: Optional[str] = None
+    pid: Optional[int] = None
+    returncode: Optional[int] = None
+    error: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class RLJobSubmitResponse(BaseModel):
+    """Response returned when a NeMo-RL job is submitted."""
+
+    job: RLJobRecord
 
 
 class IdempotencyRecord(BaseModel):
@@ -397,6 +443,51 @@ def _fingerprint_request(operation: str, request: BaseModel) -> str:
 
 def _load_operator_ui() -> str:
     return (pathlib.Path(__file__).with_name("operator_ui.html")).read_text(encoding="utf-8")
+
+
+def _resolve_rl_path(repo_dir: pathlib.Path, relative_path: str, field_name: str) -> pathlib.Path:
+    candidate = (repo_dir / relative_path).resolve()
+    try:
+        candidate.relative_to(repo_dir)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must stay inside repo_dir") from exc
+    if not candidate.exists():
+        raise ValueError(f"{field_name} does not exist: {candidate}")
+    return candidate
+
+
+def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str]:
+    entrypoint = _resolve_rl_path(repo_dir, request.entrypoint, "entrypoint")
+    config_path = _resolve_rl_path(repo_dir, request.config_path, "config_path")
+    if request.launcher == "local":
+        runner_prefix = ["uv", "run", "python", "-u"] if request.runner == "uv" else ["python", "-u"]
+        return [*runner_prefix, str(entrypoint), "--config", str(config_path), *request.overrides]
+    container_repo = "/workspace/RL"
+    container_entrypoint = str(pathlib.PurePosixPath(container_repo) / request.entrypoint)
+    container_config = str(pathlib.PurePosixPath(container_repo) / request.config_path)
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "--gpus",
+        "all",
+        "--ipc=host",
+        "--network",
+        "host",
+        "-v",
+        f"{repo_dir}:{container_repo}",
+        "-w",
+        container_repo,
+        request.container_image,
+        "uv",
+        "run",
+        "python",
+        "-u",
+        container_entrypoint,
+        "--config",
+        container_config,
+        *request.overrides,
+    ]
 
 
 class JsonStore:
@@ -592,6 +683,7 @@ def create_app(
     restore_runs_on_startup: bool = False,
     resume_interrupted_jobs_on_startup: bool = False,
     worker_processes: int = 0,
+    rl_repo_dir: Optional[str] = None,
 ) -> FastAPI:
     """Create a single-process mixed-LoRA FastAPI app."""
     if not HAS_FASTAPI or not HAS_PYDANTIC:
@@ -620,6 +712,12 @@ def create_app(
     active_mixed_lora_backend = "triton" if use_triton_lora else mixed_lora_backend
     run_store = _build_store(scratch_dir=scratch_dir, backend=metadata_backend, key="runs", record_type=RunRecord)
     job_store = _build_store(scratch_dir=scratch_dir, backend=metadata_backend, key="jobs", record_type=JobRecord)
+    rl_job_store = _build_store(
+        scratch_dir=scratch_dir,
+        backend=metadata_backend,
+        key="rl_jobs",
+        record_type=RLJobRecord,
+    )
     idempotency_store = _build_store(
         scratch_dir=scratch_dir,
         backend=metadata_backend,
@@ -670,6 +768,14 @@ def create_app(
             job.updated_at = _utc_now()
     if jobs:
         job_store.save(jobs)
+    rl_jobs: dict[str, RLJobRecord] = rl_job_store.load()
+    for rl_job in rl_jobs.values():
+        if rl_job.status in {"queued", "running"}:
+            rl_job.status = "failed"
+            rl_job.error = "RL job was interrupted by service restart"
+            rl_job.updated_at = _utc_now()
+    if rl_jobs:
+        rl_job_store.save(rl_jobs)
     idempotency_records: dict[str, IdempotencyRecord] = idempotency_store.load()
     for idem_record in idempotency_records.values():
         if idem_record.status == "running":
@@ -680,6 +786,7 @@ def create_app(
         idempotency_store.save(idempotency_records)
     records_lock = threading.RLock()
     jobs_lock = threading.RLock()
+    rl_jobs_lock = threading.RLock()
     idempotency_lock = threading.RLock()
     rate_limit_lock = threading.RLock()
     tenant_request_times: dict[str, deque[float]] = {}
@@ -856,6 +963,8 @@ def create_app(
             "worker_alive": executor.is_alive(),
             "run_store": str(run_store.path),
             "job_store": str(job_store.path),
+            "rl_job_store": str(rl_job_store.path),
+            "rl_repo_dir": rl_repo_dir or os.environ.get("NEMO_RL_REPO_DIR"),
             "idempotency_store": str(idempotency_store.path),
             "auth_enabled": expected_api_key is not None,
             "max_resident_adapters": max_resident_adapters,
@@ -1096,6 +1205,72 @@ def create_app(
 
     def fail_job(job_id: str, exc: Exception) -> None:
         mark_job(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
+
+    def create_rl_job(request: RLJobRequest, command: list[str], repo_dir: pathlib.Path) -> RLJobRecord:
+        now = _utc_now()
+        job_id = f"rljob_{uuid.uuid4().hex[:12]}"
+        log_dir = pathlib.Path(scratch_dir) / "tinker_api" / "rl_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        job = RLJobRecord(
+            job_id=job_id,
+            name=request.name,
+            status="dry_run" if request.dry_run else "queued",
+            tenant_id=request.tenant_id,
+            launcher=request.launcher,
+            repo_dir=str(repo_dir),
+            config_path=request.config_path,
+            entrypoint=request.entrypoint,
+            command=command,
+            log_path=str(log_dir / f"{job_id}.log"),
+            created_at=now,
+            updated_at=now,
+        )
+        with rl_jobs_lock:
+            rl_jobs[job.job_id] = job
+            rl_job_store.save(rl_jobs)
+        return job
+
+    def get_rl_job_record(job_id: str) -> RLJobRecord:
+        with rl_jobs_lock:
+            job = rl_jobs.get(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail=f"Unknown rl_job_id: {job_id}")
+            return job
+
+    def mark_rl_job(
+        job_id: str,
+        *,
+        status: Optional[str] = None,
+        pid: Optional[int] = None,
+        returncode: Optional[int] = None,
+        error: Optional[str] = None,
+    ) -> RLJobRecord:
+        with rl_jobs_lock:
+            job = get_rl_job_record(job_id)
+            if status is not None:
+                job.status = status
+            if pid is not None:
+                job.pid = pid
+            if returncode is not None:
+                job.returncode = returncode
+            if error is not None:
+                job.error = error
+            job.updated_at = _utc_now()
+            rl_job_store.save(rl_jobs)
+            return job
+
+    def run_rl_job(job_id: str) -> None:
+        job = get_rl_job_record(job_id)
+        try:
+            mark_rl_job(job_id, status="running")
+            with pathlib.Path(job.log_path).open("ab") as log_fp:
+                log_fp.write(("Command: " + " ".join(job.command) + "\n\n").encode("utf-8"))
+                process = subprocess.Popen(job.command, cwd=job.repo_dir, stdout=log_fp, stderr=subprocess.STDOUT)
+                mark_rl_job(job_id, pid=process.pid)
+                returncode = process.wait()
+            mark_rl_job(job_id, status="succeeded" if returncode == 0 else "failed", returncode=returncode)
+        except Exception as exc:
+            mark_rl_job(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
 
     def get_idempotent_response(operation: str, key: Optional[str], request: BaseModel) -> Optional[dict[str, Any]]:
         if key is None:
@@ -1401,6 +1576,70 @@ def create_app(
         if job.status == "running":
             return mark_job(job_id, status="canceling")
         return job
+
+    @app.get("/rl/jobs", response_model=list[RLJobRecord])
+    def list_rl_jobs(http_request: Request) -> list[RLJobRecord]:
+        with rl_jobs_lock:
+            return [job for job in rl_jobs.values() if visible_to_request(job.tenant_id, http_request)]
+
+    @app.get("/rl/jobs/{job_id}", response_model=RLJobRecord)
+    def get_rl_job(job_id: str, http_request: Request) -> RLJobRecord:
+        job = get_rl_job_record(job_id)
+        authorize_tenant(job.tenant_id, http_request)
+        return job
+
+    @app.get("/rl/jobs/{job_id}/logs")
+    def get_rl_job_logs(job_id: str, http_request: Request, tail_bytes: int = 20000) -> dict[str, Any]:
+        job = get_rl_job_record(job_id)
+        authorize_tenant(job.tenant_id, http_request)
+        if job.log_path is None:
+            return {"job_id": job_id, "text": ""}
+        log_path = pathlib.Path(job.log_path)
+        if not log_path.exists():
+            return {"job_id": job_id, "text": ""}
+        tail_bytes = max(1, min(tail_bytes, 200000))
+        with log_path.open("rb") as fp:
+            fp.seek(0, os.SEEK_END)
+            size = fp.tell()
+            fp.seek(max(0, size - tail_bytes))
+            text = fp.read().decode("utf-8", errors="replace")
+        return {"job_id": job_id, "text": text}
+
+    @app.post("/rl/jobs", response_model=RLJobSubmitResponse)
+    def submit_rl_job(request: RLJobRequest, http_request: Request) -> RLJobSubmitResponse:
+        request = _model_with_update(request, tenant_id=resolve_tenant_id(request.tenant_id, http_request))
+        existing = get_idempotent_response("rl_jobs", request.idempotency_key, request)
+        if existing is not None:
+            return existing
+        repo_dir_text = request.repo_dir or rl_repo_dir or os.environ.get("NEMO_RL_REPO_DIR")
+        if not repo_dir_text:
+            raise HTTPException(
+                status_code=400,
+                detail="Set repo_dir, create_app(..., rl_repo_dir=...), or NEMO_RL_REPO_DIR to a NeMo-RL checkout.",
+            )
+        repo_dir = pathlib.Path(repo_dir_text).expanduser().resolve()
+        if not repo_dir.is_dir():
+            raise HTTPException(status_code=400, detail=f"NeMo-RL repo_dir does not exist: {repo_dir}")
+        try:
+            _resolve_rl_path(repo_dir, request.entrypoint, "entrypoint")
+            _resolve_rl_path(repo_dir, request.config_path, "config_path")
+            command = _build_rl_command(request, repo_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        job = create_rl_job(request, command, repo_dir)
+        response = RLJobSubmitResponse(job=job)
+        if request.dry_run:
+            store_idempotent_response("rl_jobs", request.idempotency_key, request, response)
+            return response
+        if request.run_async:
+            thread = threading.Thread(target=run_rl_job, args=(job.job_id,), daemon=True)
+            thread.start()
+            store_idempotent_response("rl_jobs", request.idempotency_key, request, response)
+            return response
+        run_rl_job(job.job_id)
+        response = RLJobSubmitResponse(job=get_rl_job_record(job.job_id))
+        store_idempotent_response("rl_jobs", request.idempotency_key, request, response)
+        return response
 
     @app.post("/train_steps")
     def train_steps(request: TrainStepsRequest, http_request: Request) -> TrainStepsResponse | JobSubmitResponse:
