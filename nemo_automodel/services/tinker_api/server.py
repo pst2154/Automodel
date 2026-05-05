@@ -480,7 +480,11 @@ def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str
     ]
     if request.docker_user:
         command.extend(["--user", request.docker_user])
-    runner_prefix = ["uv", "run", "python", "-u"] if request.runner == "uv" else ["python", "-u"]
+    runner_prefix = (
+        ["/root/.local/bin/uv", "run", "/opt/nemo_rl_venv/bin/python", "-u"]
+        if request.runner == "uv"
+        else ["/opt/nemo_rl_venv/bin/python", "-u"]
+    )
     command.extend(
         [
             "-v",
