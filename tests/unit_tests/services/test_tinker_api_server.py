@@ -20,6 +20,7 @@ import pytest
 from nemo_automodel.services.tinker_api import server
 from nemo_automodel.services.tinker_api.future import APIFuture
 from nemo_automodel.services.tinker_api.types import (
+    DetachAdapterResponse,
     ForwardBackwardOutput,
     OptimStepResponse,
     SampleResponse,
@@ -44,6 +45,10 @@ class FakeTrainingClient:
 
     def save_state(self, name):
         return APIFuture(SaveStateResponse(path=f"/tmp/{name}"))
+
+    def detach(self):
+        self.service.steps.pop(self.adapter_id, None)
+        return APIFuture(DetachAdapterResponse(adapter_id=self.adapter_id, remaining_adapters=len(self.service.steps)))
 
 
 class FakeMixedLoraServiceClient:
@@ -191,6 +196,42 @@ def test_mixed_lora_server_records_worker_operation_envelopes(monkeypatch, tmp_p
             "num_runs": 1,
         }
         assert worker_operations["operations"][2]["payload"] == {"learning_rate": 0.001}
+
+
+def test_mixed_lora_server_detaches_resident_run(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, worker_processes=1)
+    with fastapi_testclient.TestClient(app) as client:
+        created = client.post("/runs", json={"name": "placed"}).json()
+        run_id = created["run_id"]
+        worker_id = created["worker_id"]
+
+        detached = client.post(f"/runs/{run_id}/detach", json={"idempotency_key": "detach-placed"}).json()
+        repeated = client.post(f"/runs/{run_id}/detach", json={"idempotency_key": "detach-placed"}).json()
+        record = client.get(f"/runs/{run_id}").json()
+        worker_runs = client.get(f"/workers/{worker_id}/runs").json()
+        worker_operations = client.get(f"/workers/{worker_id}/operations").json()
+
+        assert detached == repeated
+        assert detached["run"]["status"] == "detached"
+        assert detached["output"] == {"adapter_id": created["adapter_id"], "remaining_adapters": 0}
+        assert record["status"] == "detached"
+        assert worker_runs["assigned_run_count"] == 0
+        assert worker_operations["operations"][-1]["operation"] == "detach_run"
+        assert client.post(f"/runs/{run_id}/sample", json={"prompt": "hello"}).status_code == 404
+
+
+def test_mixed_lora_server_detach_releases_resident_capacity(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, max_resident_adapters=1)
+    client = fastapi_testclient.TestClient(app)
+
+    created = client.post("/runs", json={"name": "first"}).json()
+    assert client.post("/runs", json={"name": "blocked"}).status_code == 429
+    assert client.post(f"/runs/{created['run_id']}/detach", json={}).status_code == 200
+    second = client.post("/runs", json={"name": "second"})
+
+    assert second.status_code == 200
 
 
 def test_mixed_lora_server_reattaches_runs_after_worker_restart(monkeypatch, tmp_path):

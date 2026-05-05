@@ -30,6 +30,7 @@ from nemo_automodel.services.tinker_api.future import APIFuture
 from nemo_automodel.services.tinker_api.types import (
     AdamParams,
     Datum,
+    DetachAdapterResponse,
     ForwardBackwardOutput,
     LoraConfig,
     OptimStepResponse,
@@ -241,6 +242,14 @@ class MixedAdapterLinearLoRA(nn.Module):
         nn.init.kaiming_uniform_(lora_a, a=5**0.5)
         self.lora_a[adapter_id] = lora_a
         self.lora_b[adapter_id] = lora_b
+
+    def remove_adapter(self, adapter_id: str) -> None:
+        """Remove one resident LoRA adapter from this linear layer."""
+        if adapter_id not in self.lora_a:
+            return
+        del self.lora_a[adapter_id]
+        del self.lora_b[adapter_id]
+        self.active_ranges = [active_range for active_range in self.active_ranges if active_range[0] != adapter_id]
 
     def set_active_ranges(self, ranges: list[tuple[str, int, int]]) -> None:
         """Set batch row ranges for the next mixed-adapter forward pass."""
@@ -694,6 +703,20 @@ class MixedLoraServiceClient:
             )
         return APIFuture(SaveStateResponse(path=str(output_dir)))
 
+    def detach_adapter(self, adapter_id: str) -> APIFuture[DetachAdapterResponse]:
+        """Remove one resident adapter and release its trainable parameters."""
+        if adapter_id not in self.adapters:
+            raise KeyError(f"Unknown adapter_id: {adapter_id}")
+        self._set_active_ranges([])
+        handle = self.adapters.pop(adapter_id)
+        if handle.optimizer is not None:
+            handle.optimizer.zero_grad(set_to_none=True)
+        for layer in self.mixed_lora_layers.values():
+            layer.remove_adapter(adapter_id)
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+        return APIFuture(DetachAdapterResponse(adapter_id=adapter_id, remaining_adapters=len(self.adapters)))
+
     def sample(
         self, adapter_id: str, prompt: str, params: Optional[SamplingParams] = None
     ) -> APIFuture[SampleResponse]:
@@ -749,3 +772,7 @@ class MixedLoraTrainingClient:
     def save_state(self, name: str) -> APIFuture[SaveStateResponse]:
         """Save this adapter's state."""
         return self.service.save_adapter_state(self.adapter_id, name)
+
+    def detach(self) -> APIFuture[DetachAdapterResponse]:
+        """Detach this adapter from the resident service."""
+        return self.service.detach_adapter(self.adapter_id)

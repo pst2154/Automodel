@@ -124,6 +124,12 @@ class SaveRequest(BaseModel):
     idempotency_key: Optional[str] = None
 
 
+class DetachRunRequest(BaseModel):
+    """Detach request."""
+
+    idempotency_key: Optional[str] = None
+
+
 class SampleRequest(BaseModel):
     """Sampling request."""
 
@@ -232,6 +238,13 @@ class OptimStepResponseModel(BaseModel):
 
 class SaveResponse(BaseModel):
     """Save response with run metadata."""
+
+    run: RunRecord
+    output: dict[str, Any]
+
+
+class DetachRunResponse(BaseModel):
+    """Detach response with run metadata."""
 
     run: RunRecord
     output: dict[str, Any]
@@ -622,6 +635,11 @@ def create_app(
                 run_ids=[record.run_id],
                 payload={"reason": reason},
             )
+
+    def detach_run_from_worker(record: RunRecord) -> None:
+        if worker_manager is None or record.worker_id is None:
+            return
+        worker_manager.detach_run(record.worker_id, record.run_id)
 
     def reattach_runs_to_worker(worker_id: str, *, reason: str) -> list[str]:
         if worker_manager is None:
@@ -1378,6 +1396,33 @@ def create_app(
                 return response
             except Exception as exc:
                 store_idempotent_error(f"save:{run_id}", request.idempotency_key, request, exc)
+                mark_run_failed(run_id, exc)
+                raise
+
+        return executor.submit(op).result()
+
+    @app.post("/runs/{run_id}/detach")
+    def detach_run(run_id: str, request: DetachRunRequest) -> DetachRunResponse:
+        existing = get_idempotent_response(f"detach:{run_id}", request.idempotency_key, request)
+        if existing is not None:
+            return existing
+        enforce_tenant_rate_limit(get_record(run_id).tenant_id, "detach")
+
+        def op() -> DetachRunResponse:
+            client = get_run(run_id)
+            try:
+                record = mark_run(run_id, status="detaching")
+                output = client.detach().result()
+                record_worker_operation("detach_run", [run_id], {"adapter_id": client.adapter_id})
+                detach_run_from_worker(record)
+                runs.pop(run_id, None)
+                record = mark_run(run_id, status="detached")
+                run_store.save(records)
+                response = DetachRunResponse(run=record, output=asdict(output))
+                store_idempotent_response(f"detach:{run_id}", request.idempotency_key, request, response)
+                return response
+            except Exception as exc:
+                store_idempotent_error(f"detach:{run_id}", request.idempotency_key, request, exc)
                 mark_run_failed(run_id, exc)
                 raise
 

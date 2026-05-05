@@ -91,6 +91,14 @@ class SaveStateResponse:
 
 
 @dataclass
+class DetachAdapterResponse:
+    """Output from detaching one resident adapter."""
+
+    adapter_id: str
+    remaining_adapters: int
+
+
+@dataclass
 class SamplingParams:
     """Generation parameters for the prototype sampler."""
 

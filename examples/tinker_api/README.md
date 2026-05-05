@@ -26,7 +26,8 @@ What works now:
 - Multiple resident LoRA adapters over one base model.
 - Mixed batches where different rows route to different adapters.
 - HTTP API for runs, mixed forward/backward, optimizer steps, saves, sampling,
-  server-owned train jobs, async jobs, cancellation, and restart metadata.
+  detach/unload, server-owned train jobs, async jobs, cancellation, and restart
+  metadata.
 - SQLite metadata by default at `$SCRATCH/tinker_api/metadata.sqlite3`.
 - Idempotency keys for retryable mutating endpoints.
 - Basic bearer-token auth, per-tenant run caps, and per-tenant rate limits.
@@ -172,6 +173,7 @@ POST /runs/{run_id}/forward_backward
 POST /mixed_forward_backward
 POST /runs/{run_id}/optim_step
 POST /runs/{run_id}/save
+POST /runs/{run_id}/detach
 POST /runs/{run_id}/sample
 POST /train_steps
 GET  /jobs
@@ -304,6 +306,7 @@ tile.
 - Focused service suite after worker-operation envelopes: `33 passed`.
 - Focused service suite after worker restart reconciliation: `34 passed`.
 - Focused service suite after worker reconcile/readiness hardening: `35 passed`.
+- Focused service suite after run detach lifecycle support: `37 passed`.
 - Nemotron direct mixed-LoRA smoke: passed.
 - Nemotron HTTP mixed-LoRA train/inference/save smoke: passed.
 - Nemotron HTTP restart restore smoke: passed.
