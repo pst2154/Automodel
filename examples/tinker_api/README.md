@@ -12,190 +12,144 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Tinker-like AutoModel Prototype
+# Tinker-like Mixed-LoRA Service Prototype
 
-This prototype has two layers. The original in-process `ServiceClient` mirrors
-the smallest useful part of Tinker's public training loop while staying inside
-NeMo AutoModel:
+This branch is an experimental Tinker-style training service for multiple LoRA
+adapters over one resident base model. The main path is the mixed-LoRA HTTP
+service and `MixedLoraServiceClient`; older `ServiceClient` examples are legacy
+smoke tests and should not drive new work.
 
-1. Create a `ServiceClient`.
-2. Create a LoRA `TrainingClient`.
-3. Call `forward_backward(data, "cross_entropy")`.
-4. Call `optim_step(AdamParams(...))`.
-5. Save adapter state and sample from the in-memory model.
+## Current Status
 
-The newer mixed-LoRA HTTP service keeps multiple LoRA adapters resident over
-one base model, batches different adapters together, supports RL-style losses,
-and exposes durable run/job metadata. Use the HTTP service for the
-Tinker-like/mLoRA experiments; the original `ServiceClient` is now mostly a
-small compatibility smoke-test path.
+What works now:
 
-## What Works
+- Multiple resident LoRA adapters over one base model.
+- Mixed batches where different rows route to different adapters.
+- HTTP API for runs, mixed forward/backward, optimizer steps, saves, sampling,
+  server-owned train jobs, async jobs, cancellation, and restart metadata.
+- SQLite metadata by default at `$SCRATCH/tinker_api/metadata.sqlite3`.
+- Idempotency keys for retryable mutating endpoints.
+- Basic bearer-token auth, per-tenant run caps, and per-tenant rate limits.
+- RL-style losses: `cross_entropy`, `importance_sampling`, `ppo`, `cispo`, and
+  `dro`.
+- Backends: `loop`, `grouped`, `triton`, and `grouped_triton`.
+- Supervised worker processes with durable run placement and management RPC
+  (`/workers/{worker_id}/ping`, `/workers/{worker_id}/echo`).
+- Opt-in live Tinker parity harness.
+- Nemotron Nano 30B A3B direct mixed-LoRA smoke.
 
-- One resident base model per `ServiceClient` worker key in the legacy path.
-- Multiple resident LoRA adapters over one shared base model in the mixed
-  service path.
-- Separate adapter IDs, adapter weights, optimizer state, and checkpoint output.
-- Tinker-style synchronous futures via `.result()`.
-- Cross-entropy SFT data using `Datum`, `ModelInput`, `target_tokens`, and `weights`.
-- Mixed-service RL losses: `importance_sampling`, `ppo`, `cispo`, and `dro`.
-- Mixed-adapter backends: `loop`, `grouped`, `triton`, and `grouped_triton`.
-- SQLite-backed run/job/idempotency metadata plus interrupted-job continuation.
-- Optional local worker-process supervision via `--worker-processes`.
-- Durable worker placement metadata on each run when worker processes are
-  configured.
-- Worker management IPC via `POST /workers/{worker_id}/ping` and
-  `POST /workers/{worker_id}/echo`, proving the HTTP service can route
-  serialized commands into a specific supervised process.
-- Tiny GPU smoke tests in the `nvcr.io/nvidia/nemo-automodel:26.04` container.
+What is not V1-ready:
 
-## Current Limits
+- Real model operations still run in the API process, not inside worker
+  subprocesses.
+- Worker death does not yet detach/restart/rehydrate assigned runs.
+- `grouped_triton` is correct but slower than `grouped` today.
+- No checked-in live Tinker golden values yet.
+- Observability is minimal.
 
-- The legacy `ServiceClient` path still serializes adapter execution with a
-  lock, swaps adapter weights through one patched model, and only implements
-  `cross_entropy`.
-- The mixed service has batched adapter execution, RL losses, and durable
-  metadata, but GPU work is still owned by a single in-process
-  `MixedLoraServiceClient`.
-- `--worker-processes` supervises local worker processes and exposes health
-  endpoints. Runs receive stable worker placement metadata and management
-  commands route into those processes, but GPU request execution still needs to
-  move into the worker RPC protocol.
-- Live Tinker parity is opt-in because it requires Tinker credentials and can
-  consume hosted training quota.
-- `--force-hf` is useful for arbitrary Hugging Face smoke-test models; AutoModel-native
-  loading should be used for supported production targets.
+Ignore for tomorrow:
 
-## Files
+- The legacy `ServiceClient` adapter-swapping path in `client.py`.
+- Old tiny random / Qwen toy-learning examples unless a quick sanity check is
+  needed.
+- `grouped_triton` performance tuning until the live HTTP Nemotron test works.
+- Megatron Bridge integration until the AutoModel HTTP path hits a hard wall.
 
-- `nemo_automodel/services/tinker_api/client.py` contains the shared-base worker,
-  training client, sampler, and adapter swapping logic.
-- `nemo_automodel/services/tinker_api/types.py` contains the Tinker-like request
-  and response dataclasses.
-- `examples/tinker_api/prototype_sft.py` trains one LoRA adapter.
-- `examples/tinker_api/multi_lora_prototype.py` trains two LoRA adapters over one
-  shared base model.
-- `tests/unit_tests/services/test_tinker_api.py` covers batching and worker reuse.
+## Important Files
 
-## H200 Scratch Setup
+- `nemo_automodel/services/tinker_api/mixed_client.py`: resident mixed-LoRA
+  model worker.
+- `nemo_automodel/services/tinker_api/server.py`: FastAPI service and metadata
+  orchestration.
+- `nemo_automodel/services/tinker_api/grouped_lora_kernel.py`: experimental
+  grouped Triton LoRA kernels.
+- `nemo_automodel/services/tinker_api/worker_manager.py`: local worker-process
+  supervision and management RPC.
+- `examples/tinker_api/run_mixed_lora_server.py`: HTTP server entry point.
+- `examples/tinker_api/api_smoke_client.py`: Qwen-oriented HTTP API client
+  smoke.
+- `examples/tinker_api/nemotron_nano_mixed_lora_smoke.py`: direct Python
+  Nemotron Nano mixed-LoRA smoke.
+- `examples/tinker_api/benchmark_mixed_lora_backends.py`: backend benchmark.
+- `tests/integration_tests/services/test_tinker_live_parity.py`: opt-in live
+  Tinker golden parity harness.
 
-On `4u8g-gen-0277`, use `/home/scratch.asteiner` for persistent files because
-the network home directory is small.
+## GPU Host
+
+Use:
 
 ```bash
 ssh 4u8g-gen-0277
-mkdir -p /home/scratch.asteiner/{automodel,hf,checkpoints,data}
-cd /home/scratch.asteiner/automodel
+cd /home/scratch.asteiner
+```
 
-docker run --gpus all --rm -it --shm-size=64g \
+Scratch paths:
+
+- Repo checkout for tests: `/home/scratch.asteiner/Automodel-kernel-test`
+- HF/cache root: `/home/scratch.asteiner/hf`
+- Checkpoints: `/home/scratch.asteiner/checkpoints`
+- Nemotron base model:
+  `/home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16`
+
+Container used for validation:
+
+```bash
+nvcr.io/nvidia/nemo-automodel:26.04
+```
+
+## Nemotron Nano Result
+
+The local Nemotron checkpoint is complete and loads with HF remote code:
+
+- config: `NemotronHConfig`
+- architecture: `NemotronHForCausalLM`
+- model type: `nemotron_h`
+- layers: `52`
+- hidden size: `2688`
+- routed experts: `128`
+- vocab: `131072`
+
+Important: this remote-code model does not support `attn_implementation="sdpa"`.
+Use `--attn-implementation eager`.
+
+Direct Python smoke that passed:
+
+```bash
+docker run --rm --gpus all --ipc=host \
   -v /home/scratch.asteiner:/home/scratch.asteiner \
-  -e HF_HOME=/home/scratch.asteiner/hf \
-  nvcr.io/nvidia/nemo-automodel:26.04
+  -v /home/scratch.asteiner/Automodel-kernel-test:/workspace \
+  -w /workspace \
+  nvcr.io/nvidia/nemo-automodel:26.04 \
+  python examples/tinker_api/nemotron_nano_mixed_lora_smoke.py \
+    --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
+    --scratch-dir /home/scratch.asteiner \
+    --cache-dir /home/scratch.asteiner/hf \
+    --rank 8 \
+    --alpha 16 \
+    --steps 1 \
+    --max-tokens 64 \
+    --backend grouped \
+    --torch-dtype bfloat16 \
+    --attn-implementation eager
 ```
 
-Inside the container, run:
-
-```bash
-cd /home/scratch.asteiner/automodel
-python examples/tinker_api/prototype_sft.py \
-  --base-model Qwen/Qwen3-0.6B \
-  --scratch-dir /home/scratch.asteiner \
-  --cache-dir /home/scratch.asteiner/hf \
-  --steps 5
-```
-
-For a tiny smoke test that avoids large checkpoint downloads, use:
-
-```bash
-python examples/tinker_api/prototype_sft.py \
-  --base-model hf-internal-testing/tiny-random-LlamaForCausalLM \
-  --scratch-dir /home/scratch.asteiner \
-  --cache-dir /home/scratch.asteiner/hf \
-  --steps 1 \
-  --force-hf
-```
-
-To exercise two virtual LoRA adapters sharing one base model:
-
-```bash
-python examples/tinker_api/multi_lora_prototype.py \
-  --base-model hf-internal-testing/tiny-random-LlamaForCausalLM \
-  --scratch-dir /home/scratch.asteiner \
-  --cache-dir /home/scratch.asteiner/hf \
-  --force-hf
-```
-
-Expected output includes:
+Observed result:
 
 ```text
-shared_worker=True
-adapter_1=adapter-...
-adapter_2=adapter-...
-adapter_1_loss=...
-adapter_2_loss=...
+backend=grouped
+layers=24
+target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj']
+first_losses=(52.26771545410156, 69.93525695800781)
+last_losses=(52.26771545410156, 69.93525695800781)
+atlas_saved=/home/scratch.asteiner/checkpoints/nemotron-nano-atlas-smoke
+borealis_saved=/home/scratch.asteiner/checkpoints/nemotron-nano-borealis-smoke
 ```
 
-To train two Qwen LoRA adapters long enough to learn separate toy tasks:
+Saved adapter files were verified in both checkpoint directories.
 
-```bash
-python examples/tinker_api/train_two_lora_tasks.py \
-  --base-model Qwen/Qwen3-0.6B \
-  --scratch-dir /home/scratch.asteiner \
-  --cache-dir /home/scratch.asteiner/hf \
-  --steps 250 \
-  --batch-size 4 \
-  --lr 1e-3 \
-  --rank 16 \
-  --force-hf
-```
+## HTTP API
 
-On `4u8g-gen-0277`, this run produced `shared_worker=True`, drove both
-adapter eval losses to approximately zero, and saved:
-
-```text
-/home/scratch.asteiner/checkpoints/qwen-two-lora-atlas
-/home/scratch.asteiner/checkpoints/qwen-two-lora-borealis
-```
-
-## Experimental Mixed-Batch MultiLoRA
-
-The serialized prototype above proves the Tinker-style control plane. The
-experimental mixed-batch path in `mixed_client.py` is closer to mLoRA: multiple
-adapters are resident in the model at the same time, and one concatenated batch
-routes row ranges to different adapters during the same forward/backward pass.
-
-```bash
-python examples/tinker_api/mixed_lora_qwen.py \
-  --base-model Qwen/Qwen3-0.6B \
-  --scratch-dir /home/scratch.asteiner \
-  --cache-dir /home/scratch.asteiner/hf \
-  --steps 160 \
-  --batch-size 2 \
-  --lr 1e-3 \
-  --rank 16
-```
-
-On `4u8g-gen-0277`, this produced:
-
-```text
-mixed_batch=True
-atlas_loss before=6.3113 first_step=6.1240 last_step=0.0000 after=0.0000
-borealis_loss before=5.8499 first_step=5.9166 last_step=0.0000 after=0.0000
-/home/scratch.asteiner/checkpoints/mixed-qwen-atlas
-/home/scratch.asteiner/checkpoints/mixed-qwen-borealis
-```
-
-This mixed path is intentionally single-node and pure PyTorch. It is useful for
-validating the runtime shape, but production throughput would still need grouped
-or fused LoRA kernels and distributed-aware adapter sharding.
-
-## HTTP API Prototype
-
-The experimental branch also includes a thin FastAPI wrapper around the
-single-process mixed-LoRA worker. It is intentionally single-node, but it now
-has the first service-shaped pieces: a worker queue that serializes GPU
-operations, JSON-backed run metadata, checkpoint restore, and a compact HTTP
-contract:
+Current endpoints:
 
 ```text
 GET  /health
@@ -211,303 +165,90 @@ POST /train_steps
 GET  /jobs
 GET  /jobs/{job_id}
 POST /jobs/{job_id}/cancel
+GET  /workers
+POST /workers/restart_dead
+POST /workers/{worker_id}/ping
+POST /workers/{worker_id}/echo
 ```
 
-Run records include `status`, `sequence`, `optimizer_steps`,
-`tenant_id`, `forward_backward_calls`, `last_loss`, `last_metrics`,
-`last_checkpoint_path`, `last_error`, `restored_from`, `created_at`, and
-`updated_at`. State-changing endpoints return both the compact run record and
-the operation output, so clients do not need to make a second call after every
-training step. Metadata is persisted to SQLite by default at
-`$SCRATCH/tinker_api/metadata.sqlite3`. After a server restart, previously
-known runs are listed as `detached` by default; if they have a checkpoint path,
-`--restore-runs-on-startup` rehydrates them as resident adapters under the same
-run ids. For debugging, the server can still use the old JSON files with
-`--metadata-backend json`.
-
-Mutating endpoints that can safely be retried accept an optional
-`idempotency_key`: `POST /runs`, `POST /train_steps`,
-`POST /runs/{run_id}/optim_step`, and `POST /runs/{run_id}/save`. Reusing the
-same key with the same payload returns the original response; reusing it with a
-different payload fails with `409`.
-
-For a shared scratch server, start with a bearer token and a resident-adapter
-cap:
+Start a Nemotron HTTP server tomorrow with:
 
 ```bash
-TINKER_API_KEY=dev-secret \
-python examples/tinker_api/run_mixed_lora_server.py \
-  --base-model Qwen/Qwen3-0.6B \
-  --scratch-dir /home/scratch.asteiner \
-  --cache-dir /home/scratch.asteiner/hf \
-  --mixed-lora-backend grouped \
-  --max-resident-adapters 8 \
-  --max-runs-per-tenant 2 \
-  --tenant-rate-limit-per-minute 120 \
-  --restore-runs-on-startup \
-  --resume-interrupted-jobs-on-startup
+cd /home/scratch.asteiner/Automodel-kernel-test
+docker run --rm --gpus all --ipc=host \
+  -v /home/scratch.asteiner:/home/scratch.asteiner \
+  -v /home/scratch.asteiner/Automodel-kernel-test:/workspace \
+  -w /workspace \
+  -p 18080:18080 \
+  nvcr.io/nvidia/nemo-automodel:26.04 \
+  python examples/tinker_api/run_mixed_lora_server.py \
+    --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
+    --scratch-dir /home/scratch.asteiner \
+    --cache-dir /home/scratch.asteiner/hf \
+    --rank 8 \
+    --alpha 16 \
+    --mixed-lora-backend grouped \
+    --attn-implementation eager \
+    --torch-dtype bfloat16 \
+    --host 0.0.0.0 \
+    --port 18080
 ```
 
-Clients then pass `--api-key dev-secret`. Runs and `POST /train_steps` can also
-carry a `tenant_id`; one training job may not mix runs from different tenants.
-The server enforces both the global resident-adapter cap and the optional
-per-tenant resident-run and requests-per-minute caps. Requests without a
-`tenant_id` share a `_default` tenant bucket.
+We have not yet completed the full live HTTP Nemotron request flow. That is the
+first task tomorrow.
 
-If the service restarts while an async `POST /train_steps` job is queued or
-running, `--resume-interrupted-jobs-on-startup` requeues persisted training jobs
-from their last completed step after resident runs have been restored. This is
-step-boundary continuation, not mid-forward/backward checkpointing.
+## Backend Benchmark Result
 
-Start the server:
+H200 backend benchmark at batch 8, seq 128, hidden/out 2048, rank 16, 4
+adapters:
 
-```bash
-python examples/tinker_api/run_mixed_lora_server.py \
-  --base-model Qwen/Qwen3-0.6B \
-  --scratch-dir /home/scratch.asteiner \
-  --cache-dir /home/scratch.asteiner/hf \
-  --rank 16 \
-  --host 127.0.0.1 \
-  --port 18080
+```text
+loop,1.4236 ms/step,719321.62 tokens/s
+grouped,0.9428 ms/step,1086138.53 tokens/s
+triton,2.4760 ms/step,413564.91 tokens/s
+grouped_triton,11.5310 ms/step,88804.13 tokens/s
 ```
 
-In another shell, run a small client smoke:
+Conclusion: use `grouped` for now. `grouped_triton` is parity-tested but slow
+because adapter-gradient reductions scan rows serially by adapter/rank/output
+tile.
 
-```bash
-python examples/tinker_api/api_smoke_client.py \
-  --base-url http://127.0.0.1:18080 \
-  --base-model Qwen/Qwen3-0.6B \
-  --cache-dir /home/scratch.asteiner/hf \
-  --steps 20 \
-  --batch-size 1 \
-  --tenant-id smoke
-```
+## Validation Already Run
 
-For the stronger Qwen learn-and-sample check, run:
+- Full Tinker API unit suite in container: `31 passed`.
+- Nemotron direct mixed-LoRA smoke: passed.
+- Backend benchmark smoke: passed.
+- Worker IPC ping/echo tests: passed.
+- Local `ruff` and `py_compile`: passed.
 
-```bash
-python examples/tinker_api/api_smoke_client.py \
-  --base-url http://127.0.0.1:18080 \
-  --base-model Qwen/Qwen3-0.6B \
-  --cache-dir /home/scratch.asteiner/hf \
-  --steps 160 \
-  --batch-size 2 \
-  --lr 1e-3 \
-  --max-new-tokens 12 \
-  --verify-samples
-```
+Local laptop pytest is not reliable because the local environment has a
+`tokenizers`/`transformers` version mismatch. Use the container for meaningful
+test results.
 
-That client creates two runs, sends different Atlas and Borealis training
-examples through one `POST /mixed_forward_backward` call per step, steps each
-adapter independently, samples both adapters, verifies the expected route
-strings, and saves separate checkpoints.
+## Tomorrow Plan
 
-To let the service own the whole training loop through one `POST /train_steps`
-job, add `--server-train-steps`:
+1. **Run the full Nemotron HTTP flow.**
+   Start `run_mixed_lora_server.py` with the Nemotron command above. Then send
+   real HTTP requests to create two runs, call `/mixed_forward_backward`, call
+   `/runs/{id}/optim_step`, save both adapters, and inspect `/health`, `/runs`,
+   and checkpoint files.
 
-```bash
-python examples/tinker_api/api_smoke_client.py \
-  --base-url http://127.0.0.1:18080 \
-  --base-model Qwen/Qwen3-0.6B \
-  --cache-dir /home/scratch.asteiner/hf \
-  --steps 120 \
-  --batch-size 2 \
-  --lr 1e-3 \
-  --max-new-tokens 12 \
-  --server-train-steps \
-  --tenant-id smoke \
-  --verify-samples
-```
+2. **Add a Nemotron HTTP smoke client.**
+   Either extend `api_smoke_client.py` or add
+   `nemotron_nano_api_smoke_client.py`. It should use tokenized Atlas/Borealis
+   examples, `target_tokens`, and `weights`, and it should support `steps=0`,
+   `steps=1`, and checkpoint restore.
 
-`POST /train_steps` supports `run_async: true`; in that mode it returns a job
-record immediately and clients can poll `GET /jobs/{job_id}`. Cancel requests
-are best-effort in this prototype: queued jobs become `canceled`, and running
-jobs switch to `canceling` and stop at the next step boundary.
+3. **Commit the live HTTP result.**
+   Update this README with the exact server command, client command, losses,
+   saved checkpoint paths, and any memory/runtime notes.
 
-To restore those saved adapters in a fresh server process:
+4. **Only if the HTTP flow passes: test restore.**
+   Restart the server with `--restore-runs-on-startup`, create runs from the
+   saved adapter checkpoints, and verify they are resident and callable.
 
-```bash
-python examples/tinker_api/api_smoke_client.py \
-  --base-url http://127.0.0.1:18080 \
-  --base-model Qwen/Qwen3-0.6B \
-  --cache-dir /home/scratch.asteiner/hf \
-  --steps 0 \
-  --atlas-checkpoint /home/scratch.asteiner/checkpoints/api-smoke-atlas \
-  --borealis-checkpoint /home/scratch.asteiner/checkpoints/api-smoke-borealis \
-  --verify-samples
-```
-
-Restore validates the checkpoint before loading weights. The saved
-`adapter_config.json` must match the running service's base model, LoRA rank,
-alpha, and target modules, and the adapter tensor keys must match the resident
-mixed-LoRA layout.
-
-This API layer is not production hardened. It has only simple bearer-token auth,
-no distributed worker management yet, and only lightweight SQLite metadata. Its
-purpose is to freeze the basic Tinker-like HTTP contract around the mixed
-training worker while keeping the implementation pure Python.
-
-### Mixed-LoRA Backends
-
-The prototype now has four backend modes for the adapter delta inside each
-patched linear layer:
-
-- `loop`: original PyTorch implementation, one adapter range at a time.
-- `grouped`: vectorized PyTorch reference path that stacks selected adapter
-  weights and computes all active row deltas in one batched operation.
-- `triton`: AutoModel's existing PEFT `LoRATritonFunction`, called once per
-  active adapter range.
-- `grouped_triton`: experimental grouped mixed-adapter Triton path that takes
-  one adapter id per active batch row and launches across the mixed batch.
-
-Use the grouped reference path when you want to mimic the shape of an mLoRA
-grouped kernel without compiling a new kernel:
-
-```bash
-python examples/tinker_api/run_mixed_lora_server.py \
-  --base-model Qwen/Qwen3-0.6B \
-  --scratch-dir /home/scratch.asteiner \
-  --cache-dir /home/scratch.asteiner/hf \
-  --rank 16 \
-  --mixed-lora-backend grouped
-```
-
-Use the Triton bridge when you want the existing compiled LoRA kernels:
-
-```bash
-python examples/tinker_api/run_mixed_lora_server.py \
-  --base-model Qwen/Qwen3-0.6B \
-  --scratch-dir /home/scratch.asteiner \
-  --cache-dir /home/scratch.asteiner/hf \
-  --rank 16 \
-  --mixed-lora-backend triton
-```
-
-The `triton` path covers the LoRA delta for one adapter range at a time and
-includes backward. The `grouped` path is closer to the desired production
-kernel contract, but it still relies on PyTorch batched operations and dynamic
-weight stacking.
-
-Use the grouped Triton path when you want to exercise the first real
-mixed-adapter kernel surface:
-
-```bash
-python examples/tinker_api/run_mixed_lora_server.py \
-  --base-model Qwen/Qwen3-0.6B \
-  --scratch-dir /home/scratch.asteiner \
-  --cache-dir /home/scratch.asteiner/hf \
-  --rank 16 \
-  --mixed-lora-backend grouped_triton
-```
-
-`grouped_triton` currently uses Triton for the LoRA forward delta, input
-gradient (`dX`), and adapter weight gradients (`dA`/`dB`). The adapter-gradient
-kernels use segmented reductions by adapter id, with each program owning an
-adapter/rank/tile output region to avoid cross-program atomics in this
-prototype.
-
-### RL Losses
-
-`forward_backward`, `mixed_forward_backward`, and `train_steps` accept these
-`loss_fn` values:
-
-- `cross_entropy`: SFT-style token cross entropy.
-- `importance_sampling`: policy-gradient style `-ratio * advantage`.
-- `ppo`: Tinker-style clipped-ratio objective.
-- `cispo`: clipped-ratio gradient coefficient on target logprobs.
-- `dro`: Tinker-style quadratic penalty on policy divergence.
-
-The RL modes require Tinker-style `loss_fn_inputs["logprobs"]` and
-`loss_fn_inputs["advantages"]`; `weights` remains an optional token mask or
-weight. `loss_fn_config` supports `clip_low_threshold` and
-`clip_high_threshold` for `ppo`/`cispo`, and `beta` for `dro`. Losses are
-summed over tokens to match Tinker diagnostics.
-
-### Live Tinker Parity
-
-The repository includes an opt-in live parity harness at
-`tests/integration_tests/services/test_tinker_live_parity.py`. It is skipped by
-default because it needs Tinker credentials and runs against hosted
-infrastructure.
-
-Create or refresh a golden response:
-
-```bash
-RUN_TINKER_LIVE_PARITY=1 \
-TINKER_API_KEY=... \
-TINKER_UPDATE_GOLDEN=1 \
-python -m pytest tests/integration_tests/services/test_tinker_live_parity.py
-```
-
-Compare future responses to the saved golden:
-
-```bash
-RUN_TINKER_LIVE_PARITY=1 \
-TINKER_API_KEY=... \
-python -m pytest tests/integration_tests/services/test_tinker_live_parity.py
-```
-
-The production kernel work that remains is:
-
-1. Benchmarks comparing `loop`, `grouped`, `triton`, and `grouped_triton` on
-   realistic Qwen hidden sizes, rank 16/32, and mixed tenant batch shapes.
-2. Tuning grouped Triton tile sizes and, if needed, replacing serial
-   per-output-region reductions with atomic split reductions for large batches.
-3. Optional fused optimizer updates for many small adapter tensors, once the
-   training service has enough resident-adapter churn to make Python optimizer
-   overhead visible.
-
-No attention, RoPE, base-model GEMM, or normalization kernels need to change
-for the single-node prototype. The kernel work is specifically in the LoRA
-delta path and, later, the small-adapter optimizer path.
-
-Run the backend microbenchmark on a GPU host with:
-
-```bash
-python examples/tinker_api/benchmark_mixed_lora_backends.py \
-  --batch-size 8 \
-  --seq-len 128 \
-  --hidden-size 2048 \
-  --out-features 2048 \
-  --rank 16
-```
-
-An initial H200 smoke run at that shape showed `grouped` faster than `loop`,
-while `grouped_triton` was slower because its adapter-gradient kernels scan
-rows serially per adapter/rank/output tile. Treat that as the next kernel
-tuning target rather than assuming the custom kernel is already a performance
-win.
-
-### Nemotron Nano Smoke
-
-The local checkpoint at
-`/home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16` can load through
-the mixed-LoRA prototype with HF remote code when attention is set to `eager`.
-Use a narrow attention-only LoRA target list first:
-
-```bash
-python examples/tinker_api/nemotron_nano_mixed_lora_smoke.py \
-  --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
-  --scratch-dir /home/scratch.asteiner \
-  --cache-dir /home/scratch.asteiner/hf \
-  --rank 8 \
-  --alpha 16 \
-  --steps 1 \
-  --max-tokens 64 \
-  --backend grouped \
-  --torch-dtype bfloat16 \
-  --attn-implementation eager
-```
-
-Initial H200 result: 24 attention projection layers were patched, one mixed
-two-adapter forward/backward + optimizer step completed, and adapter checkpoints
-were saved under `/home/scratch.asteiner/checkpoints/nemotron-nano-atlas-smoke`
-and `/home/scratch.asteiner/checkpoints/nemotron-nano-borealis-smoke`.
-
-## Next Steps
-
-1. Move GPU request execution into the assigned supervised worker process
-   instead of the in-process mixed-LoRA worker.
-2. Benchmark and tune `grouped_triton` against the existing LoRA backends.
-3. Run the opt-in live Tinker parity test whenever credentials/quota are
-   available and check in reviewed golden values.
+5. **Then decide between two next tracks.**
+   If HTTP Nemotron is stable, move model operations into worker RPC. If it is
+   memory/runtime fragile, pivot production-scale training through the official
+   Nemotron/Megatron Bridge path and keep this service as the API/control-plane
+   prototype.
