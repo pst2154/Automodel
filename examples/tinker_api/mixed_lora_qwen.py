@@ -33,10 +33,15 @@ def build_datum(tokenizer, example: Example) -> Datum:
     prompt_tokens = tokenizer.encode(example.prompt, add_special_tokens=True)
     completion_tokens = tokenizer.encode(example.completion, add_special_tokens=False)
     tokens = prompt_tokens + completion_tokens
-    weights = [0] * len(prompt_tokens) + [1] * len(completion_tokens)
+    if len(tokens) < 2:
+        raise ValueError("SFT datum needs at least two tokens")
+    input_tokens = tokens[:-1]
+    target_tokens = tokens[1:]
+    first_completion_label = max(0, min(len(prompt_tokens), len(tokens)) - 1)
+    weights = [0.0] * first_completion_label + [1.0] * max(0, len(target_tokens) - first_completion_label)
     return Datum(
-        model_input=ModelInput.from_ints(tokens),
-        loss_fn_inputs={"target_tokens": ModelInput.from_ints(tokens), "weights": weights},
+        model_input=ModelInput.from_ints(input_tokens),
+        loss_fn_inputs={"target_tokens": ModelInput.from_ints(target_tokens), "weights": weights},
     )
 
 

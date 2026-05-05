@@ -72,14 +72,37 @@ def build_datum(tokenizer, example: Example) -> dict[str, Any]:
     prompt_tokens = tokenizer.encode(example.prompt, add_special_tokens=True)
     completion_tokens = tokenizer.encode(example.completion, add_special_tokens=False)
     tokens = prompt_tokens + completion_tokens
-    weights = [0] * len(prompt_tokens) + [1] * len(completion_tokens)
+    if len(tokens) < 2:
+        raise ValueError("SFT datum needs at least two tokens")
+    input_tokens = tokens[:-1]
+    target_tokens = tokens[1:]
+    first_completion_label = max(0, min(len(prompt_tokens), len(tokens)) - 1)
+    weights = [0.0] * first_completion_label + [1.0] * max(0, len(target_tokens) - first_completion_label)
     return {
-        "model_input": {"tokens": tokens},
+        "model_input": {"tokens": input_tokens},
         "loss_fn_inputs": {
-            "target_tokens": {"tokens": tokens},
+            "target_tokens": {"tokens": target_tokens},
             "weights": weights,
         },
     }
+
+
+def make_atlas_examples() -> list[Example]:
+    return [
+        Example("Tenant Atlas lookup. What is routing key alpha?\nAnswer:", " atlas-route-17."),
+        Example("Tenant Atlas lookup. What is routing key beta?\nAnswer:", " atlas-route-29."),
+        Example("Tenant Atlas lookup. What is routing key gamma?\nAnswer:", " atlas-route-43."),
+        Example("Tenant Atlas lookup. What is escalation color alpha?\nAnswer:", " emerald."),
+    ]
+
+
+def make_borealis_examples() -> list[Example]:
+    return [
+        Example("Tenant Borealis lookup. What is routing key alpha?\nAnswer:", " borealis-route-05."),
+        Example("Tenant Borealis lookup. What is routing key beta?\nAnswer:", " borealis-route-14."),
+        Example("Tenant Borealis lookup. What is routing key gamma?\nAnswer:", " borealis-route-38."),
+        Example("Tenant Borealis lookup. What is escalation color alpha?\nAnswer:", " silver."),
+    ]
 
 
 def main() -> None:
@@ -117,14 +140,8 @@ def main() -> None:
     atlas = post_json(args.base_url, "/runs", atlas_payload, args.api_key)
     borealis = post_json(args.base_url, "/runs", borealis_payload, args.api_key)
 
-    atlas_datum = build_datum(
-        tokenizer,
-        Example("Tenant Atlas lookup. What is routing key alpha?\nAnswer:", " atlas-route-17."),
-    )
-    borealis_datum = build_datum(
-        tokenizer,
-        Example("Tenant Borealis lookup. What is routing key alpha?\nAnswer:", " borealis-route-05."),
-    )
+    atlas_data = [build_datum(tokenizer, example) for example in make_atlas_examples()]
+    borealis_data = [build_datum(tokenizer, example) for example in make_borealis_examples()]
     atlas_prompt = "Tenant Atlas lookup. What is routing key alpha?\nAnswer:"
     borealis_prompt = "Tenant Borealis lookup. What is routing key alpha?\nAnswer:"
 
@@ -153,12 +170,12 @@ def main() -> None:
             "/train_steps",
             {
                 "batches": {
-                    atlas["run_id"]: [atlas_datum] * args.batch_size,
-                    borealis["run_id"]: [borealis_datum] * args.batch_size,
+                    atlas["run_id"]: atlas_data,
+                    borealis["run_id"]: borealis_data,
                 },
                 "steps": args.steps,
                 "learning_rate": args.lr,
-                "batch_size": 1,
+                "batch_size": args.batch_size,
                 "save_names": {
                     atlas["run_id"]: "api-smoke-atlas",
                     borealis["run_id"]: "api-smoke-borealis",
@@ -180,8 +197,8 @@ def main() -> None:
                 "/mixed_forward_backward",
                 {
                     "batches": {
-                        atlas["run_id"]: [atlas_datum] * args.batch_size,
-                        borealis["run_id"]: [borealis_datum] * args.batch_size,
+                        atlas["run_id"]: atlas_data * args.batch_size,
+                        borealis["run_id"]: borealis_data * args.batch_size,
                     }
                 },
                 args.api_key,

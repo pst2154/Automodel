@@ -15,6 +15,7 @@
 import pytest
 import torch
 
+from examples.tinker_api.api_smoke_client import Example, build_datum
 from nemo_automodel.services.tinker_api import client as tinker_client
 from nemo_automodel.services.tinker_api.client import _build_batch
 from nemo_automodel.services.tinker_api.future import APIFuture
@@ -25,6 +26,14 @@ from nemo_automodel.services.tinker_api.mixed_client import (
     _rl_token_loss,
 )
 from nemo_automodel.services.tinker_api.types import Datum, ModelInput
+
+
+class _FakeTokenizer:
+    def encode(self, text, add_special_tokens=False):
+        tokens = [ord(char) for char in text]
+        if add_special_tokens:
+            return [1] + tokens
+        return tokens
 
 
 def test_api_future_returns_value():
@@ -44,6 +53,18 @@ def test_build_batch_pads_and_masks_weights():
 
     assert input_ids.tolist() == [[10, 11, 12], [20, 21, 0]]
     assert labels.tolist() == [[-100, 11, 12], [20, 21, -100]]
+
+
+def test_example_sft_builder_uses_next_token_labels():
+    datum = build_datum(_FakeTokenizer(), Example("ab", "cd"))
+
+    input_tokens = datum["model_input"]["tokens"]
+    target_tokens = datum["loss_fn_inputs"]["target_tokens"]["tokens"]
+    weights = datum["loss_fn_inputs"]["weights"]
+
+    assert input_tokens == [1, ord("a"), ord("b"), ord("c")]
+    assert target_tokens == [ord("a"), ord("b"), ord("c"), ord("d")]
+    assert weights == [0.0, 0.0, 1.0, 1.0]
 
 
 @pytest.mark.parametrize("loss_fn", ["importance_sampling", "ppo", "cispo", "dro"])
@@ -169,6 +190,7 @@ def test_mixed_lora_layer_grouped_backend_matches_loop_forward_backward():
 
 
 @pytest.mark.run_only_on("GPU")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for Triton LoRA parity")
 def test_mixed_lora_layer_triton_bridge_matches_torch_forward_backward():
     torch.manual_seed(1234)
     base_ref = torch.nn.Linear(8, 6, bias=False, device="cuda")
@@ -229,6 +251,7 @@ def test_mixed_lora_layer_triton_bridge_matches_torch_forward_backward():
 
 
 @pytest.mark.run_only_on("GPU")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for grouped Triton LoRA parity")
 def test_mixed_lora_layer_grouped_triton_matches_torch_forward_backward():
     torch.manual_seed(1234)
     base_ref = torch.nn.Linear(8, 6, bias=False, device="cuda")
@@ -289,6 +312,7 @@ def test_mixed_lora_layer_grouped_triton_matches_torch_forward_backward():
 
 
 @pytest.mark.run_only_on("GPU")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for grouped LoRA Triton reductions")
 def test_grouped_lora_da_db_kernels_match_torch_reductions():
     torch.manual_seed(1234)
     x = torch.randn(7, 8, device="cuda", dtype=torch.float32)

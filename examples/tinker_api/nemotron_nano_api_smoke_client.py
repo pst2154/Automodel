@@ -67,12 +67,16 @@ def build_datum(tokenizer, example: Example, max_tokens: int) -> dict[str, Any]:
     prompt_tokens = tokenizer.encode(example.prompt, add_special_tokens=True)
     completion_tokens = tokenizer.encode(example.completion, add_special_tokens=False)
     tokens = (prompt_tokens + completion_tokens)[:max_tokens]
-    prompt_length = min(len(prompt_tokens), len(tokens))
-    weights = [0.0] * prompt_length + [1.0] * max(0, len(tokens) - prompt_length)
+    if len(tokens) < 2:
+        raise ValueError("SFT datum needs at least two tokens")
+    input_tokens = tokens[:-1]
+    target_tokens = tokens[1:]
+    first_completion_label = max(0, min(len(prompt_tokens), len(tokens)) - 1)
+    weights = [0.0] * first_completion_label + [1.0] * max(0, len(target_tokens) - first_completion_label)
     return {
-        "model_input": {"tokens": tokens},
+        "model_input": {"tokens": input_tokens},
         "loss_fn_inputs": {
-            "target_tokens": {"tokens": tokens},
+            "target_tokens": {"tokens": target_tokens},
             "weights": weights,
         },
     }
@@ -131,7 +135,9 @@ def main() -> None:
     parser.add_argument("--atlas-run-id", default=None)
     parser.add_argument("--borealis-run-id", default=None)
     parser.add_argument("--atlas-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-atlas-smoke")
-    parser.add_argument("--borealis-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-borealis-smoke")
+    parser.add_argument(
+        "--borealis-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-borealis-smoke"
+    )
     parser.add_argument("--save-prefix", default="nemotron-api")
     parser.add_argument("--detach-after", action="store_true")
     args = parser.parse_args()
