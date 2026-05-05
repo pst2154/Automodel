@@ -227,6 +227,7 @@ class RLJobRequest(BaseModel):
     launcher: RLLauncher = "local"
     runner: RLRunner = "uv"
     docker_repo_dir: Optional[str] = None
+    docker_user: Optional[str] = None
     container_image: str = "nvcr.io/nvidia/nemo-rl:v0.6.0"
     run_async: bool = True
     dry_run: bool = False
@@ -467,7 +468,7 @@ def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str
     container_entrypoint = str(pathlib.PurePosixPath(container_repo) / request.entrypoint)
     container_config = str(pathlib.PurePosixPath(container_repo) / request.config_path)
     docker_repo_dir = request.docker_repo_dir or str(repo_dir)
-    return [
+    command = [
         "docker",
         "run",
         "--rm",
@@ -476,20 +477,27 @@ def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str
         "--ipc=host",
         "--network",
         "host",
-        "-v",
-        f"{docker_repo_dir}:{container_repo}",
-        "-w",
-        container_repo,
-        request.container_image,
-        "uv",
-        "run",
-        "python",
-        "-u",
-        container_entrypoint,
-        "--config",
-        container_config,
-        *request.overrides,
     ]
+    if request.docker_user:
+        command.extend(["--user", request.docker_user])
+    command.extend(
+        [
+            "-v",
+            f"{docker_repo_dir}:{container_repo}",
+            "-w",
+            container_repo,
+            request.container_image,
+            "uv",
+            "run",
+            "python",
+            "-u",
+            container_entrypoint,
+            "--config",
+            container_config,
+            *request.overrides,
+        ]
+    )
+    return command
 
 
 class JsonStore:

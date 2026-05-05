@@ -517,6 +517,7 @@ Answer:</textarea></label>
             <label>Container image<input id="rl-image" value="nvcr.io/nvidia/nemo-rl:v0.6.0" /></label>
             <label>Job name<input id="rl-name" value="grpo-smoke" /></label>
           </div>
+          <label>Docker user<input id="rl-docker-user" value="140045:30" /></label>
           <label>Hydra overrides<textarea id="rl-overrides">policy.dtensor_cfg.lora_cfg.enabled=true
 policy.dtensor_cfg.lora_cfg.dim=8
 policy.dtensor_cfg.lora_cfg.use_triton=false
@@ -715,6 +716,7 @@ logger.wandb_enabled=false</textarea></label>
           runner: $("rl-runner").value,
           container_image: $("rl-image").value.trim(),
           docker_repo_dir: $("rl-docker-repo").value.trim() || null,
+          docker_user: $("rl-docker-user").value.trim() || null,
           dry_run: dryRun,
           run_async: true,
           overrides: $("rl-overrides").value.split(/\n+/).map((line) => line.trim()).filter(Boolean),

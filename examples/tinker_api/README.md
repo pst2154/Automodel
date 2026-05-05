@@ -239,6 +239,7 @@ curl -s http://127.0.0.1:18080/rl/jobs \
     "name": "grpo-smoke",
     "repo_dir": "/workspace/RL",
     "docker_repo_dir": "/home/scratch.asteiner/RL",
+    "docker_user": "140045:30",
     "launcher": "docker",
     "container_image": "nvcr.io/nvidia/nemo-rl:v0.6.0",
     "dry_run": true,
@@ -304,6 +305,8 @@ socket and pass both paths:
 - `repo_dir`: path as seen inside the Tinker container, for validation.
 - `docker_repo_dir`: path as seen by the host Docker daemon, for the nested
   NeMo-RL container mount.
+- `docker_user`: host uid/gid for scratch writes when NFS root-squash prevents
+  root in the nested container from writing editable package metadata.
 
 Start a localhost-only Nemotron HTTP server on `4u8g-gen-0277` with:
 
