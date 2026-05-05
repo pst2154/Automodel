@@ -1,0 +1,675 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Nemotron-Tinker</title>
+    <style>
+      :root {
+        --ink: #151515;
+        --muted: #62615c;
+        --paper: #f5f1e8;
+        --panel: #fffaf0;
+        --line: #25231f;
+        --green: #4d8a57;
+        --blue: #326ca8;
+        --red: #b5483f;
+        --gold: #c79339;
+        --shadow: 0 16px 40px rgba(26, 24, 20, 0.13);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background:
+          linear-gradient(90deg, rgba(21, 21, 21, 0.04) 1px, transparent 1px),
+          linear-gradient(rgba(21, 21, 21, 0.035) 1px, transparent 1px),
+          var(--paper);
+        background-size: 32px 32px;
+        font-family: "IBM Plex Sans", "Aptos", "Segoe UI", sans-serif;
+      }
+
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        min-height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--ink);
+        background: #fef7e8;
+        box-shadow: 3px 3px 0 var(--line);
+        cursor: pointer;
+      }
+
+      button:hover {
+        transform: translate(1px, 1px);
+        box-shadow: 2px 2px 0 var(--line);
+      }
+
+      button.primary {
+        color: #fffaf0;
+        background: var(--green);
+      }
+
+      button.warn {
+        color: #fffaf0;
+        background: var(--red);
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        min-height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 7px 9px;
+        color: var(--ink);
+        background: #fffdf7;
+      }
+
+      textarea {
+        min-height: 130px;
+        resize: vertical;
+        font-family: "IBM Plex Mono", "Cascadia Code", monospace;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      label {
+        display: grid;
+        gap: 5px;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--muted);
+        text-transform: uppercase;
+      }
+
+      header {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 18px;
+        align-items: end;
+        padding: 22px clamp(16px, 3vw, 34px) 14px;
+        border-bottom: 2px solid var(--line);
+        background: rgba(255, 250, 240, 0.9);
+      }
+
+      h1 {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: clamp(30px, 4vw, 56px);
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      .topline {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 26px;
+        padding: 3px 8px;
+        border: 1px solid var(--line);
+        border-radius: 99px;
+        background: #fffdf7;
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(150px, 1fr)) auto;
+        gap: 10px;
+        min-width: min(720px, 100%);
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: minmax(340px, 0.85fr) minmax(420px, 1.15fr);
+        gap: 18px;
+        padding: 18px clamp(16px, 3vw, 34px) 34px;
+      }
+
+      section {
+        min-width: 0;
+        border: 2px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 250, 240, 0.94);
+        box-shadow: var(--shadow);
+      }
+
+      .section-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        padding: 11px 12px;
+        border-bottom: 2px solid var(--line);
+        background: #f3dfae;
+      }
+
+      h2,
+      h3 {
+        margin: 0;
+        font-size: 15px;
+        letter-spacing: 0;
+      }
+
+      .body {
+        padding: 12px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .metric {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 9px;
+        background: #fffdf7;
+      }
+
+      .metric b {
+        display: block;
+        font-size: 24px;
+      }
+
+      .metric span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      th,
+      td {
+        padding: 8px;
+        border-bottom: 1px solid rgba(37, 35, 31, 0.2);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+      }
+
+      tr.selected {
+        background: rgba(77, 138, 87, 0.16);
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .split {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      pre {
+        overflow: auto;
+        max-height: 360px;
+        margin: 0;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #1c1b18;
+        color: #f5f1e8;
+        font-family: "IBM Plex Mono", "Cascadia Code", monospace;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .log {
+        min-height: 210px;
+      }
+
+      .status-ok {
+        color: var(--green);
+      }
+
+      .status-bad {
+        color: var(--red);
+      }
+
+      .status-work {
+        color: var(--blue);
+      }
+
+      @media (max-width: 980px) {
+        header,
+        main,
+        .split {
+          grid-template-columns: 1fr;
+        }
+
+        .toolbar,
+        .metrics {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .toolbar,
+        .metrics,
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Nemotron-Tinker</h1>
+        <div class="topline">
+          <span id="health-pill" class="pill">health: unknown</span>
+          <span id="queue-pill" class="pill">queue: -</span>
+          <span id="worker-pill" class="pill">workers: -</span>
+        </div>
+      </div>
+      <div class="toolbar">
+        <label>Tenant<input id="tenant" placeholder="tenant-a" /></label>
+        <label>Bearer token<input id="token" placeholder="optional" type="password" /></label>
+        <label>API root<input id="api-root" value="" /></label>
+        <button id="refresh">Refresh</button>
+      </div>
+    </header>
+
+    <main>
+      <section>
+        <div class="section-head">
+          <h2>Runs</h2>
+          <div class="actions">
+            <button id="create-run" class="primary">Create</button>
+            <button id="sample-run">Sample</button>
+            <button id="save-run">Save</button>
+            <button id="detach-run" class="warn">Detach</button>
+          </div>
+        </div>
+        <div class="body">
+          <div class="grid">
+            <label>Name<input id="run-name" value="atlas" /></label>
+            <label>Adapter ID<input id="adapter-id" placeholder="auto" /></label>
+            <label>Checkpoint<input id="checkpoint" placeholder="/home/scratch.../checkpoint" /></label>
+            <label>Save name<input id="save-name" value="operator-save" /></label>
+          </div>
+          <div style="height: 12px"></div>
+          <table>
+            <thead>
+              <tr>
+                <th></th>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Tenant</th>
+                <th>Step</th>
+                <th>Loss</th>
+              </tr>
+            </thead>
+            <tbody id="runs"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Control</h2>
+          <div class="actions">
+            <button id="train-sync" class="primary">Train Sync</button>
+            <button id="train-async">Train Async</button>
+            <button id="mixed-fb">Forward/Backward</button>
+          </div>
+        </div>
+        <div class="body">
+          <div class="split">
+            <div>
+              <div class="grid">
+                <label>Steps<input id="steps" type="number" min="1" value="2" /></label>
+                <label>Learning rate<input id="learning-rate" value="0.0005" /></label>
+              </div>
+              <div style="height: 10px"></div>
+              <label>Training datum JSON<textarea id="datum-json">{"model_input":{"tokens":[1,2,3,4]},"loss_fn_inputs":{}}</textarea></label>
+              <div style="height: 10px"></div>
+              <label>Prompt<input id="prompt" value="Write one concise sentence about adapter routing." /></label>
+            </div>
+            <div>
+              <div class="metrics">
+                <div class="metric"><b id="metric-runs">-</b><span>resident</span></div>
+                <div class="metric"><b id="metric-jobs">-</b><span>jobs</span></div>
+                <div class="metric"><b id="metric-errors">-</b><span>failures</span></div>
+                <div class="metric"><b id="metric-ops">-</b><span>ops</span></div>
+              </div>
+              <div style="height: 10px"></div>
+              <pre id="response" class="log">{}</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Jobs</h2>
+          <button id="cancel-job">Cancel Selected Job</button>
+        </div>
+        <div class="body">
+          <table>
+            <thead>
+              <tr>
+                <th></th>
+                <th>Kind</th>
+                <th>Status</th>
+                <th>Tenant</th>
+                <th>Progress</th>
+              </tr>
+            </thead>
+            <tbody id="jobs"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Service</h2>
+          <div class="actions">
+            <button id="workers">Workers</button>
+            <button id="reconcile">Reconcile</button>
+          </div>
+        </div>
+        <div class="body">
+          <pre id="service-json">{}</pre>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const state = {
+        runs: [],
+        jobs: [],
+        selectedRun: null,
+        selectedJob: null,
+      };
+
+      const $ = (id) => document.getElementById(id);
+
+      function apiRoot() {
+        const configured = $("api-root").value.trim();
+        return configured || window.location.origin;
+      }
+
+      function headers() {
+        const result = { "Content-Type": "application/json" };
+        const token = $("token").value.trim();
+        const tenant = $("tenant").value.trim();
+        if (token) result.Authorization = `Bearer ${token}`;
+        if (tenant) result["X-Tinker-Tenant-Id"] = tenant;
+        return result;
+      }
+
+      function remember() {
+        localStorage.setItem(
+          "tinkerOperator",
+          JSON.stringify({
+            tenant: $("tenant").value,
+            token: $("token").value,
+            apiRoot: $("api-root").value,
+          }),
+        );
+      }
+
+      function restore() {
+        const saved = JSON.parse(localStorage.getItem("tinkerOperator") || "{}");
+        $("tenant").value = saved.tenant || "";
+        $("token").value = saved.token || "";
+        $("api-root").value = saved.apiRoot || "";
+      }
+
+      async function request(path, options = {}) {
+        remember();
+        const response = await fetch(`${apiRoot()}${path}`, {
+          ...options,
+          headers: { ...headers(), ...(options.headers || {}) },
+        });
+        const text = await response.text();
+        const payload = text ? JSON.parse(text) : {};
+        if (!response.ok) {
+          throw new Error(`${response.status} ${payload.detail || text}`);
+        }
+        return payload;
+      }
+
+      function show(payload) {
+        $("response").textContent = JSON.stringify(payload, null, 2);
+      }
+
+      function statusClass(status) {
+        if (["ready", "created", "completed"].includes(status)) return "status-ok";
+        if (["failed", "detached", "canceled"].includes(status)) return "status-bad";
+        return "status-work";
+      }
+
+      function renderRuns() {
+        $("runs").innerHTML = state.runs
+          .map(
+            (run) => `
+              <tr class="${run.run_id === state.selectedRun ? "selected" : ""}" data-run="${run.run_id}">
+                <td><input type="checkbox" ${run.run_id === state.selectedRun ? "checked" : ""}></td>
+                <td>${run.name || run.run_id}<br><small>${run.adapter_id}</small></td>
+                <td class="${statusClass(run.status)}">${run.status}</td>
+                <td>${run.tenant_id || ""}</td>
+                <td>${run.optimizer_steps}</td>
+                <td>${run.last_loss ?? ""}</td>
+              </tr>`,
+          )
+          .join("");
+        document.querySelectorAll("[data-run]").forEach((row) => {
+          row.addEventListener("click", () => {
+            state.selectedRun = row.dataset.run;
+            renderRuns();
+          });
+        });
+      }
+
+      function renderJobs() {
+        $("jobs").innerHTML = state.jobs
+          .map(
+            (job) => `
+              <tr class="${job.job_id === state.selectedJob ? "selected" : ""}" data-job="${job.job_id}">
+                <td><input type="checkbox" ${job.job_id === state.selectedJob ? "checked" : ""}></td>
+                <td>${job.kind}<br><small>${job.job_id}</small></td>
+                <td class="${statusClass(job.status)}">${job.status}</td>
+                <td>${job.tenant_id || ""}</td>
+                <td>${JSON.stringify(job.progress || {})}</td>
+              </tr>`,
+          )
+          .join("");
+        document.querySelectorAll("[data-job]").forEach((row) => {
+          row.addEventListener("click", () => {
+            state.selectedJob = row.dataset.job;
+            renderJobs();
+          });
+        });
+      }
+
+      async function refresh() {
+        try {
+          const [health, runs, jobs, metrics] = await Promise.all([
+            request("/health"),
+            request("/runs"),
+            request("/jobs"),
+            request("/metrics"),
+          ]);
+          state.runs = runs;
+          state.jobs = jobs;
+          if (!state.selectedRun && runs[0]) state.selectedRun = runs[0].run_id;
+          if (!state.selectedJob && jobs[0]) state.selectedJob = jobs[0].job_id;
+          $("health-pill").textContent = `health: ${health.status}`;
+          $("queue-pill").textContent = `queue: ${health.queue_depth}`;
+          $("worker-pill").textContent = `workers: ${health.worker_processes}`;
+          $("metric-runs").textContent = health.num_runs;
+          $("metric-jobs").textContent = jobs.length;
+          $("metric-errors").textContent = Object.values(metrics.operations || {}).reduce(
+            (total, op) => total + (op.failures || 0),
+            0,
+          );
+          $("metric-ops").textContent = Object.values(metrics.operations || {}).reduce(
+            (total, op) => total + (op.count || 0),
+            0,
+          );
+          $("service-json").textContent = JSON.stringify({ health, metrics }, null, 2);
+          renderRuns();
+          renderJobs();
+        } catch (error) {
+          $("health-pill").textContent = "health: error";
+          $("response").textContent = error.message;
+        }
+      }
+
+      function selectedRun() {
+        if (!state.selectedRun) throw new Error("Select a run first");
+        return state.selectedRun;
+      }
+
+      function selectedRunsForBatch() {
+        const selected = state.runs.filter((run) => run.status !== "detached").slice(0, 2);
+        if (selected.length === 0) throw new Error("Create a run first");
+        return selected;
+      }
+
+      function datum() {
+        return JSON.parse($("datum-json").value);
+      }
+
+      async function createRun() {
+        const payload = {
+          name: $("run-name").value || undefined,
+          adapter_id: $("adapter-id").value || undefined,
+          checkpoint_path: $("checkpoint").value || undefined,
+        };
+        show(await request("/runs", { method: "POST", body: JSON.stringify(payload) }));
+        await refresh();
+      }
+
+      async function forwardBackward() {
+        const batches = {};
+        for (const run of selectedRunsForBatch()) {
+          batches[run.run_id] = [datum()];
+        }
+        show(await request("/mixed_forward_backward", { method: "POST", body: JSON.stringify({ batches }) }));
+        await refresh();
+      }
+
+      async function train(runAsync) {
+        const batches = {};
+        for (const run of selectedRunsForBatch()) {
+          batches[run.run_id] = [datum()];
+        }
+        const payload = {
+          batches,
+          steps: Number($("steps").value),
+          learning_rate: Number($("learning-rate").value),
+          run_async: runAsync,
+        };
+        show(await request("/train_steps", { method: "POST", body: JSON.stringify(payload) }));
+        await refresh();
+      }
+
+      async function sample() {
+        show(
+          await request(`/runs/${selectedRun()}/sample`, {
+            method: "POST",
+            body: JSON.stringify({ prompt: $("prompt").value, max_new_tokens: 64 }),
+          }),
+        );
+        await refresh();
+      }
+
+      async function save() {
+        show(
+          await request(`/runs/${selectedRun()}/save`, {
+            method: "POST",
+            body: JSON.stringify({ name: $("save-name").value }),
+          }),
+        );
+        await refresh();
+      }
+
+      async function detach() {
+        show(await request(`/runs/${selectedRun()}/detach`, { method: "POST", body: JSON.stringify({}) }));
+        await refresh();
+      }
+
+      async function cancelJob() {
+        if (!state.selectedJob) throw new Error("Select a job first");
+        show(await request(`/jobs/${state.selectedJob}/cancel`, { method: "POST", body: JSON.stringify({}) }));
+        await refresh();
+      }
+
+      async function workers() {
+        show(await request("/workers"));
+      }
+
+      async function reconcile() {
+        show(await request("/workers/reconcile", { method: "POST", body: JSON.stringify({}) }));
+        await refresh();
+      }
+
+      function bind(id, fn) {
+        $(id).addEventListener("click", async () => {
+          try {
+            await fn();
+          } catch (error) {
+            $("response").textContent = error.message;
+          }
+        });
+      }
+
+      restore();
+      bind("refresh", refresh);
+      bind("create-run", createRun);
+      bind("mixed-fb", forwardBackward);
+      bind("train-sync", () => train(false));
+      bind("train-async", () => train(true));
+      bind("sample-run", sample);
+      bind("save-run", save);
+      bind("detach-run", detach);
+      bind("cancel-job", cancelJob);
+      bind("workers", workers);
+      bind("reconcile", reconcile);
+      refresh();
+      setInterval(refresh, 5000);
+    </script>
+  </body>
+</html>

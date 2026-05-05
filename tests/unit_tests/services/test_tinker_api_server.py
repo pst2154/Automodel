@@ -133,6 +133,18 @@ def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch, tmp_path):
     assert health["metrics"]["operations"]["create_run"]["count"] == 2
 
 
+def test_mixed_lora_server_serves_operator_ui(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+
+    response = client.get("/ui")
+
+    assert response.status_code == 200
+    assert "Nemotron-Tinker" in response.text
+    assert 'id="create-run"' in response.text
+
+
 def test_mixed_lora_server_reports_supervised_worker_processes(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
     app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, worker_processes=2)
@@ -632,3 +644,52 @@ def test_mixed_lora_server_records_tenant_and_rejects_mixed_tenant_job(monkeypat
     )
 
     assert response.status_code == 400
+
+
+def test_mixed_lora_server_scopes_resources_by_tenant_header(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    first = client.post("/runs", json={"name": "atlas"}, headers={"X-Tinker-Tenant-Id": "tenant-a"}).json()
+    second = client.post("/runs", json={"name": "borealis"}, headers={"X-Tinker-Tenant-Id": "tenant-b"}).json()
+
+    tenant_a_runs = client.get("/runs", headers={"X-Tinker-Tenant-Id": "tenant-a"}).json()
+    assert [run["run_id"] for run in tenant_a_runs] == [first["run_id"]]
+    assert tenant_a_runs[0]["tenant_id"] == "tenant-a"
+    assert client.get(f"/runs/{second['run_id']}", headers={"X-Tinker-Tenant-Id": "tenant-a"}).status_code == 403
+    assert (
+        client.post(
+            f"/runs/{second['run_id']}/sample",
+            json={"prompt": "hello"},
+            headers={"X-Tinker-Tenant-Id": "tenant-a"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/mixed_forward_backward",
+            json={
+                "batches": {
+                    first["run_id"]: [{"model_input": {"tokens": [1, 2, 3]}, "loss_fn_inputs": {}}],
+                    second["run_id"]: [{"model_input": {"tokens": [4, 5, 6]}, "loss_fn_inputs": {}}],
+                }
+            },
+            headers={"X-Tinker-Tenant-Id": "tenant-a"},
+        ).status_code
+        == 403
+    )
+
+
+def test_mixed_lora_server_rejects_body_tenant_header_mismatch(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+
+    response = client.post(
+        "/runs",
+        json={"name": "atlas", "tenant_id": "tenant-b"},
+        headers={"X-Tinker-Tenant-Id": "tenant-a"},
+    )
+
+    assert response.status_code == 403
+    assert "X-Tinker-Tenant-Id" in response.json()["detail"]

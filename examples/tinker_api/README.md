@@ -28,9 +28,11 @@ What works now:
 - HTTP API for runs, mixed forward/backward, optimizer steps, saves, sampling,
   detach/unload, server-owned train jobs, async jobs, cancellation, and restart
   metadata.
+- Built-in Nemotron-Tinker operator UI at `/ui`.
 - SQLite metadata by default at `$SCRATCH/tinker_api/metadata.sqlite3`.
 - Idempotency keys for retryable mutating endpoints.
-- Basic bearer-token auth, per-tenant run caps, and per-tenant rate limits.
+- Basic bearer-token auth, `X-Tinker-Tenant-Id` request scoping, per-tenant run
+  caps, and per-tenant rate limits.
 - RL-style losses: `cross_entropy`, `importance_sampling`, `ppo`, `cispo`, and
   `dro`.
 - Backends: `loop`, `grouped`, `triton`, and `grouped_triton`.
@@ -170,6 +172,7 @@ Current endpoints:
 
 ```text
 GET  /health
+GET  /ui
 GET  /metrics
 POST /runs
 GET  /runs
@@ -193,6 +196,22 @@ POST /workers/{worker_id}/echo
 GET  /workers/{worker_id}/runs
 GET  /workers/{worker_id}/operations
 ```
+
+Open `http://127.0.0.1:18080/ui` for the Nemotron-Tinker operator UI. It can
+create resident LoRA runs, scope calls with `X-Tinker-Tenant-Id`, run mixed
+forward/backward and `/train_steps`, sample, save, detach, inspect jobs, and
+view health/metrics without hand-writing HTTP requests.
+
+Tenant-scoped clients should send:
+
+```text
+X-Tinker-Tenant-Id: tenant-a
+Authorization: Bearer <token>  # only when TINKER_API_KEY/--api-key is set
+```
+
+When the tenant header is present, `/runs` and `/jobs` only return that
+tenant's resources, and run/job operations fail with `403` if the resource
+belongs to another tenant.
 
 Start a localhost-only Nemotron HTTP server on `4u8g-gen-0277` with:
 
@@ -315,6 +334,8 @@ tile.
 - Focused service suite after run detach lifecycle support: `37 passed`.
 - Focused service suite after save-and-detach lifecycle support: `38 passed`.
 - Focused service suite after service metrics support: `38 passed`.
+- Focused service suite after tenant-header scoping and Nemotron-Tinker UI:
+  `41 passed`.
 - Nemotron direct mixed-LoRA smoke: passed.
 - Nemotron HTTP mixed-LoRA train/inference/save smoke: passed.
 - Nemotron HTTP restart restore smoke: passed.

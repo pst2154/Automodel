@@ -41,11 +41,14 @@ from nemo_automodel.shared.import_utils import safe_import_from
 
 HAS_FASTAPI, FastAPI = safe_import_from("fastapi", "FastAPI")
 _, HTTPException = safe_import_from("fastapi", "HTTPException")
+_, Request = safe_import_from("fastapi", "Request")
+_, HTMLResponse = safe_import_from("fastapi.responses", "HTMLResponse")
 _, JSONResponse = safe_import_from("fastapi.responses", "JSONResponse")
 HAS_PYDANTIC, BaseModel = safe_import_from("pydantic", "BaseModel")
 _, Field = safe_import_from("pydantic", "Field")
 
 MetadataBackend = Literal["sqlite", "json"]
+TENANT_HEADER = "x-tinker-tenant-id"
 
 if not HAS_PYDANTIC:  # pragma: no cover
 
@@ -367,6 +370,12 @@ def _model_to_dict(model: BaseModel) -> dict[str, Any]:
     return model.dict()
 
 
+def _model_with_update(model: BaseModel, **updates: Any) -> BaseModel:
+    payload = _model_to_dict(model)
+    payload.update(updates)
+    return type(model)(**payload)
+
+
 def _client_step(client: MixedLoraTrainingClient) -> int:
     handle = getattr(client, "handle", None)
     return int(getattr(handle, "step", 0))
@@ -376,6 +385,10 @@ def _fingerprint_request(operation: str, request: BaseModel) -> str:
     payload = {"operation": operation, "request": _model_to_dict(request)}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return sha256(encoded).hexdigest()
+
+
+def _load_operator_ui() -> str:
+    return (pathlib.Path(__file__).with_name("operator_ui.html")).read_text(encoding="utf-8")
 
 
 class JsonStore:
@@ -681,13 +694,17 @@ def create_app(
 
         @app.middleware("http")
         async def require_bearer_token(request, call_next):
-            if request.url.path == "/health":
+            if request.url.path in {"/health", "/ui"}:
                 return await call_next(request)
             authorization = request.headers.get("authorization")
             expected_authorization = f"Bearer {expected_api_key}"
             if authorization != expected_authorization:
                 return JSONResponse(status_code=401, content={"detail": "Missing or invalid bearer token"})
             return await call_next(request)
+
+    @app.get("/ui", response_class=HTMLResponse)
+    def operator_ui() -> HTMLResponse:
+        return HTMLResponse(_load_operator_ui())
 
     def get_run(run_id: str) -> MixedLoraTrainingClient:
         client = runs.get(run_id)
@@ -843,8 +860,7 @@ def create_app(
             "resume_interrupted_jobs_on_startup": resume_interrupted_jobs_on_startup,
             "worker_processes": worker_processes,
             "workers": [
-                _model_to_dict(record) if isinstance(record, BaseModel) else asdict(record)
-                for record in worker_records
+                _model_to_dict(record) if isinstance(record, BaseModel) else asdict(record) for record in worker_records
             ],
             "metrics": _model_to_dict(service_metrics.snapshot()),
         }
@@ -914,6 +930,30 @@ def create_app(
     def tenant_key(tenant_id: Optional[str]) -> str:
         return tenant_id or "_default"
 
+    def request_tenant_id(http_request: Request) -> Optional[str]:
+        tenant_id = http_request.headers.get(TENANT_HEADER)
+        if tenant_id is None:
+            return None
+        tenant_id = tenant_id.strip()
+        return tenant_id or None
+
+    def resolve_tenant_id(body_tenant_id: Optional[str], http_request: Request) -> Optional[str]:
+        header_tenant_id = request_tenant_id(http_request)
+        if body_tenant_id is not None and header_tenant_id is not None and body_tenant_id != header_tenant_id:
+            raise HTTPException(status_code=403, detail="Request tenant_id does not match X-Tinker-Tenant-Id")
+        return header_tenant_id or body_tenant_id
+
+    def authorize_tenant(record_tenant_id: Optional[str], http_request: Request) -> None:
+        header_tenant_id = request_tenant_id(http_request)
+        if header_tenant_id is None:
+            return
+        if record_tenant_id != header_tenant_id:
+            raise HTTPException(status_code=403, detail="X-Tinker-Tenant-Id is not authorized for this resource")
+
+    def visible_to_request(record_tenant_id: Optional[str], http_request: Request) -> bool:
+        header_tenant_id = request_tenant_id(http_request)
+        return header_tenant_id is None or record_tenant_id == header_tenant_id
+
     def enforce_tenant_rate_limit(tenant_id: Optional[str], operation: str) -> None:
         if tenant_rate_limit_per_minute is None:
             return
@@ -953,9 +993,14 @@ def create_app(
     def get_record(run_id: str) -> RunRecord:
         with records_lock:
             record = records.get(run_id)
-            if record is None:
-                raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
-            return record
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
+        return record
+
+    def get_authorized_record(run_id: str, http_request: Request) -> RunRecord:
+        record = get_record(run_id)
+        authorize_tenant(record.tenant_id, http_request)
+        return record
 
     def mark_run(run_id: str, *, status: str, error: Optional[str] = None) -> RunRecord:
         with records_lock:
@@ -975,7 +1020,7 @@ def create_app(
         if len(run_tenants) > 1:
             raise HTTPException(status_code=400, detail="All runs in one job must belong to the same tenant")
         run_tenant_id = next(iter(run_tenants), None)
-        if requested_tenant_id is not None and run_tenant_id is not None and requested_tenant_id != run_tenant_id:
+        if requested_tenant_id is not None and requested_tenant_id != run_tenant_id:
             raise HTTPException(status_code=403, detail="Request tenant_id does not match run tenant_id")
         return requested_tenant_id or run_tenant_id
 
@@ -1239,7 +1284,8 @@ def create_app(
     resume_interrupted_train_jobs()
 
     @app.post("/runs", response_model=CreateRunResponse)
-    def create_run(request: CreateRunRequest) -> CreateRunResponse:
+    def create_run(request: CreateRunRequest, http_request: Request) -> CreateRunResponse:
+        request = _model_with_update(request, tenant_id=resolve_tenant_id(request.tenant_id, http_request))
         existing = get_idempotent_response("create_run", request.idempotency_key, request)
         if existing is not None:
             return existing
@@ -1303,26 +1349,29 @@ def create_app(
         return executor.submit(lambda: service_metrics.observe("create_run", op)).result()
 
     @app.get("/runs", response_model=list[RunRecord])
-    def list_runs() -> list[RunRecord]:
+    def list_runs(http_request: Request) -> list[RunRecord]:
         with records_lock:
-            return list(records.values())
+            return [record for record in records.values() if visible_to_request(record.tenant_id, http_request)]
 
     @app.get("/runs/{run_id}", response_model=RunRecord)
-    def get_run_record(run_id: str) -> RunRecord:
-        return get_record(run_id)
+    def get_run_record(run_id: str, http_request: Request) -> RunRecord:
+        return get_authorized_record(run_id, http_request)
 
     @app.get("/jobs", response_model=list[JobRecord])
-    def list_jobs() -> list[JobRecord]:
+    def list_jobs(http_request: Request) -> list[JobRecord]:
         with jobs_lock:
-            return list(jobs.values())
+            return [job for job in jobs.values() if visible_to_request(job.tenant_id, http_request)]
 
     @app.get("/jobs/{job_id}", response_model=JobRecord)
-    def get_job(job_id: str) -> JobRecord:
-        return get_job_record(job_id)
+    def get_job(job_id: str, http_request: Request) -> JobRecord:
+        job = get_job_record(job_id)
+        authorize_tenant(job.tenant_id, http_request)
+        return job
 
     @app.post("/jobs/{job_id}/cancel", response_model=JobRecord)
-    def cancel_job(job_id: str) -> JobRecord:
+    def cancel_job(job_id: str, http_request: Request) -> JobRecord:
         job = get_job_record(job_id)
+        authorize_tenant(job.tenant_id, http_request)
         if job.status == "queued":
             return mark_job(job_id, status="canceled")
         if job.status == "running":
@@ -1330,7 +1379,10 @@ def create_app(
         return job
 
     @app.post("/train_steps")
-    def train_steps(request: TrainStepsRequest) -> TrainStepsResponse | JobSubmitResponse:
+    def train_steps(request: TrainStepsRequest, http_request: Request) -> TrainStepsResponse | JobSubmitResponse:
+        request = _model_with_update(request, tenant_id=resolve_tenant_id(request.tenant_id, http_request))
+        for run_id in request.batches:
+            authorize_tenant(get_record(run_id).tenant_id, http_request)
         existing = get_idempotent_response("train_steps", request.idempotency_key, request)
         if existing is not None:
             return existing
@@ -1371,8 +1423,11 @@ def create_app(
             raise
 
     @app.post("/runs/{run_id}/forward_backward")
-    def forward_backward(run_id: str, request: ForwardBackwardRequest) -> ForwardBackwardResponse:
-        enforce_tenant_rate_limit(get_record(run_id).tenant_id, "forward_backward")
+    def forward_backward(
+        run_id: str, request: ForwardBackwardRequest, http_request: Request
+    ) -> ForwardBackwardResponse:
+        record = get_authorized_record(run_id, http_request)
+        enforce_tenant_rate_limit(record.tenant_id, "forward_backward")
 
         def op() -> ForwardBackwardResponse:
             client = get_run(run_id)
@@ -1402,7 +1457,12 @@ def create_app(
         return executor.submit(lambda: service_metrics.observe("forward_backward", op)).result()
 
     @app.post("/mixed_forward_backward")
-    def mixed_forward_backward(request: MixedForwardBackwardRequest) -> dict[str, ForwardBackwardResponse]:
+    def mixed_forward_backward(
+        request: MixedForwardBackwardRequest,
+        http_request: Request,
+    ) -> dict[str, ForwardBackwardResponse]:
+        for run_id in request.batches:
+            authorize_tenant(get_record(run_id).tenant_id, http_request)
         tenant_id = tenant_for_runs(list(request.batches), None)
         enforce_tenant_rate_limit(tenant_id, "mixed_forward_backward")
 
@@ -1445,11 +1505,12 @@ def create_app(
         return executor.submit(lambda: service_metrics.observe("mixed_forward_backward", op)).result()
 
     @app.post("/runs/{run_id}/optim_step")
-    def optim_step(run_id: str, request: OptimStepRequest) -> OptimStepResponseModel:
+    def optim_step(run_id: str, request: OptimStepRequest, http_request: Request) -> OptimStepResponseModel:
         existing = get_idempotent_response(f"optim_step:{run_id}", request.idempotency_key, request)
         if existing is not None:
             return existing
-        enforce_tenant_rate_limit(get_record(run_id).tenant_id, "optim_step")
+        record = get_authorized_record(run_id, http_request)
+        enforce_tenant_rate_limit(record.tenant_id, "optim_step")
 
         def op() -> OptimStepResponseModel:
             client = get_run(run_id)
@@ -1471,11 +1532,12 @@ def create_app(
         return executor.submit(lambda: service_metrics.observe("optim_step", op)).result()
 
     @app.post("/runs/{run_id}/save")
-    def save(run_id: str, request: SaveRequest) -> SaveResponse:
+    def save(run_id: str, request: SaveRequest, http_request: Request) -> SaveResponse:
         existing = get_idempotent_response(f"save:{run_id}", request.idempotency_key, request)
         if existing is not None:
             return existing
-        enforce_tenant_rate_limit(get_record(run_id).tenant_id, "save")
+        record = get_authorized_record(run_id, http_request)
+        enforce_tenant_rate_limit(record.tenant_id, "save")
 
         def op() -> SaveResponse:
             client = get_run(run_id)
@@ -1497,11 +1559,12 @@ def create_app(
         return executor.submit(lambda: service_metrics.observe("save", op)).result()
 
     @app.post("/runs/{run_id}/detach")
-    def detach_run(run_id: str, request: DetachRunRequest) -> DetachRunResponse:
+    def detach_run(run_id: str, request: DetachRunRequest, http_request: Request) -> DetachRunResponse:
         existing = get_idempotent_response(f"detach:{run_id}", request.idempotency_key, request)
         if existing is not None:
             return existing
-        enforce_tenant_rate_limit(get_record(run_id).tenant_id, "detach")
+        record = get_authorized_record(run_id, http_request)
+        enforce_tenant_rate_limit(record.tenant_id, "detach")
 
         def op() -> DetachRunResponse:
             client = get_run(run_id)
@@ -1524,11 +1587,16 @@ def create_app(
         return executor.submit(lambda: service_metrics.observe("detach", op)).result()
 
     @app.post("/runs/{run_id}/save_and_detach")
-    def save_and_detach(run_id: str, request: SaveAndDetachRequest) -> SaveAndDetachResponse:
+    def save_and_detach(
+        run_id: str,
+        request: SaveAndDetachRequest,
+        http_request: Request,
+    ) -> SaveAndDetachResponse:
         existing = get_idempotent_response(f"save_and_detach:{run_id}", request.idempotency_key, request)
         if existing is not None:
             return existing
-        enforce_tenant_rate_limit(get_record(run_id).tenant_id, "save_and_detach")
+        record = get_authorized_record(run_id, http_request)
+        enforce_tenant_rate_limit(record.tenant_id, "save_and_detach")
 
         def op() -> SaveAndDetachResponse:
             client = get_run(run_id)
@@ -1559,8 +1627,9 @@ def create_app(
         return executor.submit(lambda: service_metrics.observe("save_and_detach", op)).result()
 
     @app.post("/runs/{run_id}/sample")
-    def sample(run_id: str, request: SampleRequest) -> SampleResponseModel:
-        enforce_tenant_rate_limit(get_record(run_id).tenant_id, "sample")
+    def sample(run_id: str, request: SampleRequest, http_request: Request) -> SampleResponseModel:
+        record = get_authorized_record(run_id, http_request)
+        enforce_tenant_rate_limit(record.tenant_id, "sample")
 
         def op() -> SampleResponseModel:
             client = get_run(run_id)

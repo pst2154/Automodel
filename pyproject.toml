@@ -25,6 +25,7 @@ include = ["nemo_automodel", "nemo_automodel.*"]
 [tool.setuptools.package-data]
 nemo_automodel = [
     "components/datasets/llm/megatron/Makefile",
+    "services/tinker_api/operator_ui.html",
 ]
 
 [tool.setuptools.dynamic]
