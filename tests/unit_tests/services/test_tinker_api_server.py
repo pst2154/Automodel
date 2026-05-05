@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import threading
 import time
 from types import SimpleNamespace
 
@@ -100,6 +101,8 @@ def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch, tmp_path):
     assert health["tenant_rate_limit_per_minute"] is None
     assert health["restore_runs_on_startup"] is False
     assert health["resume_interrupted_jobs_on_startup"] is False
+    assert health["rl_job_status_counts"] == {}
+    assert health["active_rl_process_count"] == 0
 
     first = client.post("/runs", json={"name": "atlas"}).json()
     second = client.post("/runs", json={"name": "borealis"}).json()
@@ -249,6 +252,30 @@ def test_mixed_lora_server_prepares_nemo_rl_docker_cache_mount(monkeypatch, tmp_
     assert "HF_DATASETS_CACHE=/root/.cache/huggingface/datasets" in command
 
 
+def test_mixed_lora_server_prepares_nemo_rl_docker_gpu_scope(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    rl_repo = tmp_path / "RL"
+    (rl_repo / "examples" / "configs").mkdir(parents=True)
+    (rl_repo / "examples" / "run_grpo.py").write_text("print('not launched')\n", encoding="utf-8")
+    (rl_repo / "examples" / "configs" / "grpo_math_1B.yaml").write_text("grpo: {}\n", encoding="utf-8")
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, rl_repo_dir=str(rl_repo))
+    client = fastapi_testclient.TestClient(app)
+
+    response = client.post(
+        "/rl/jobs",
+        json={
+            "name": "dry-run",
+            "launcher": "docker",
+            "runner": "python",
+            "dry_run": True,
+            "docker_gpus": "device=0",
+        },
+    ).json()
+
+    command = response["job"]["command"]
+    assert command[command.index("--gpus") + 1] == "device=0"
+
+
 def test_mixed_lora_server_expands_nemo_rl_topology_overrides(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
     rl_repo = tmp_path / "RL"
@@ -308,6 +335,115 @@ def test_mixed_lora_server_rejects_oversubscribed_single_node_topology(monkeypat
 
     assert response.status_code == 400
     assert "must be <= gpus_per_node" in response.json()["detail"]
+
+
+def test_mixed_lora_server_cancels_running_nemo_rl_bridge_job(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    rl_repo = tmp_path / "RL"
+    (rl_repo / "examples" / "configs").mkdir(parents=True)
+    (rl_repo / "examples" / "run_grpo.py").write_text("print('not launched')\n", encoding="utf-8")
+    (rl_repo / "examples" / "configs" / "grpo_math_1B.yaml").write_text("grpo: {}\n", encoding="utf-8")
+
+    processes = []
+
+    class BlockingProcess:
+        def __init__(self, command, **kwargs):
+            self.command = command
+            self.kwargs = kwargs
+            self.pid = 43210
+            self.returncode = None
+            self.done = threading.Event()
+            processes.append(self)
+
+        def wait(self, timeout=None):
+            self.done.wait(timeout=5)
+            return self.returncode
+
+    def fake_killpg(pid, sig):
+        assert pid == 43210
+        assert sig == server.signal.SIGTERM
+        processes[0].returncode = -15
+        processes[0].done.set()
+
+    monkeypatch.setattr(server.subprocess, "Popen", BlockingProcess)
+    monkeypatch.setattr(server.os, "killpg", fake_killpg)
+
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, rl_repo_dir=str(rl_repo))
+    client = fastapi_testclient.TestClient(app)
+    job = client.post(
+        "/rl/jobs",
+        json={
+            "name": "cancel-me",
+            "runner": "python",
+            "run_async": True,
+            "overrides": ["grpo.max_num_steps=100"],
+        },
+    ).json()["job"]
+
+    for _ in range(50):
+        current = client.get(f"/rl/jobs/{job['job_id']}").json()
+        if current["pid"] == 43210:
+            break
+        time.sleep(0.01)
+    assert current["status"] == "running"
+    canceled = client.post(f"/rl/jobs/{job['job_id']}/cancel").json()
+    assert canceled["status"] in {"canceling", "canceled"}
+
+    for _ in range(50):
+        current = client.get(f"/rl/jobs/{job['job_id']}").json()
+        if current["status"] == "canceled":
+            break
+        time.sleep(0.01)
+    assert current["status"] == "canceled"
+    assert current["returncode"] == -15
+
+
+def test_mixed_lora_server_times_out_nemo_rl_bridge_job(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    rl_repo = tmp_path / "RL"
+    (rl_repo / "examples" / "configs").mkdir(parents=True)
+    (rl_repo / "examples" / "run_grpo.py").write_text("print('not launched')\n", encoding="utf-8")
+    (rl_repo / "examples" / "configs" / "grpo_math_1B.yaml").write_text("grpo: {}\n", encoding="utf-8")
+
+    processes = []
+
+    class TimeoutProcess:
+        def __init__(self, command, **kwargs):
+            self.command = command
+            self.kwargs = kwargs
+            self.pid = 54321
+            self.returncode = None
+            processes.append(self)
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise server.subprocess.TimeoutExpired(self.command, timeout)
+            return self.returncode
+
+    def fake_killpg(pid, sig):
+        assert pid == 54321
+        assert sig == server.signal.SIGTERM
+        processes[0].returncode = -15
+
+    monkeypatch.setattr(server.subprocess, "Popen", TimeoutProcess)
+    monkeypatch.setattr(server.os, "killpg", fake_killpg)
+
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, rl_repo_dir=str(rl_repo))
+    client = fastapi_testclient.TestClient(app)
+    job = client.post(
+        "/rl/jobs",
+        json={
+            "name": "timeout-me",
+            "runner": "python",
+            "run_async": False,
+            "max_runtime_seconds": 0.01,
+            "overrides": ["grpo.max_num_steps=100"],
+        },
+    ).json()["job"]
+
+    assert job["status"] == "timed_out"
+    assert job["returncode"] == -15
+    assert "max_runtime_seconds=0.01" in job["error"]
 
 
 def test_mixed_lora_server_runs_local_nemo_rl_bridge_job(monkeypatch, tmp_path):

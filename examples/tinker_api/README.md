@@ -199,6 +199,7 @@ POST /rl/jobs
 GET  /rl/jobs
 GET  /rl/jobs/{job_id}
 GET  /rl/jobs/{job_id}/logs
+POST /rl/jobs/{job_id}/cancel
 GET  /workers
 POST /workers/restart_dead
 POST /workers/reconcile
@@ -317,6 +318,15 @@ curl -s http://127.0.0.1:18080/rl/jobs/<rljob_id>
 curl -s http://127.0.0.1:18080/rl/jobs/<rljob_id>/logs
 ```
 
+Cancel a running RL job:
+
+```bash
+curl -s -X POST http://127.0.0.1:18080/rl/jobs/<rljob_id>/cancel
+```
+
+Cancellation sends `SIGTERM` to the launched process group and records the job
+as `canceling` until the process exits, then `canceled`.
+
 On Blackwell, start with short smoke runs. If Triton or LoRA kernels fail in the
 NeMo-RL container, switch that recipe to the non-Triton LoRA path before testing
 larger configs.
@@ -336,6 +346,11 @@ host checkout that may be missing submodules.
   persistent Hugging Face model and dataset caches. The directory must be
   writable by the nested container user. On root-squashed NFS scratch, create a
   dedicated writable cache directory before enabling this.
+- `docker_gpus`: Docker GPU selector passed to `docker run --gpus`. The default
+  is `all`; use values such as `device=0` for shared-host smoke tests.
+- `max_runtime_seconds`: optional wall-clock timeout for the launched RL
+  process. The bridge sends `SIGTERM`, waits briefly, then escalates to
+  `SIGKILL` if the process group does not exit.
 - `docker_user`: optional host uid/gid. Do not set it for the stock NeMo-RL
   container because its venv Python resolves through `/root`, which is not
   executable by arbitrary scratch UIDs.

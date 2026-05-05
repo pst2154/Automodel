@@ -524,6 +524,10 @@ Answer:</textarea></label>
             <label>Container image<input id="rl-image" value="nvcr.io/nvidia/nemo-rl:v0.6.0" /></label>
             <label>Job name<input id="rl-name" value="grpo-smoke" /></label>
           </div>
+          <div class="two">
+            <label>Docker GPUs<input id="rl-docker-gpus" value="all" /></label>
+            <label>Max runtime seconds<input id="rl-max-runtime" type="number" min="1" value="" placeholder="optional" /></label>
+          </div>
           <div class="four">
             <label>Nodes<input id="rl-num-nodes" type="number" min="1" value="1" /></label>
             <label>GPUs/node<input id="rl-gpus-per-node" type="number" min="1" value="1" /></label>
@@ -552,6 +556,7 @@ logger.log_dir=/tmp/nvidia-tinker-rl-smoke</textarea></label>
             <button id="rl-launch" class="primary">Launch RL Job</button>
             <button id="rl-refresh">Refresh RL</button>
             <button id="rl-logs">Show Logs</button>
+            <button id="rl-cancel" class="warn">Cancel RL Job</button>
           </div>
           <pre id="rl-output" class="sample">RL job status appears here.</pre>
         </div>
@@ -710,6 +715,8 @@ logger.log_dir=/tmp/nvidia-tinker-rl-smoke</textarea></label>
         $("rl-launch").disabled = disabled;
         $("rl-refresh").disabled = disabled;
         $("rl-logs").disabled = disabled || state.rlJobs.length === 0;
+        const latestRl = latestRlJob();
+        $("rl-cancel").disabled = disabled || !latestRl || !["queued", "running"].includes(latestRl.status);
       }
 
       async function refresh() {
@@ -743,6 +750,8 @@ logger.log_dir=/tmp/nvidia-tinker-rl-smoke</textarea></label>
           context_parallel_size: optionalInt("rl-cp"),
           expert_parallel_size: optionalInt("rl-ep"),
           container_image: $("rl-image").value.trim(),
+          docker_gpus: $("rl-docker-gpus").value.trim() || "all",
+          max_runtime_seconds: optionalInt("rl-max-runtime"),
           docker_repo_dir: $("rl-docker-repo").value.trim() || null,
           docker_container_repo_dir: $("rl-docker-container-repo").value.trim() || "/opt/nemo-rl",
           docker_hf_cache_dir: $("rl-docker-hf-cache").value.trim() || null,
@@ -779,14 +788,6 @@ logger.log_dir=/tmp/nvidia-tinker-rl-smoke</textarea></label>
           raw(response);
           $("rl-output").textContent = `${response.job.command.join(" ")}\n\n${JSON.stringify(response.job, null, 2)}`;
           toast(dryRun ? "RL command prepared." : "RL job launched.");
-          if (!dryRun) {
-            let job = response.job;
-            while (["queued", "running"].includes(job.status)) {
-              await new Promise((resolve) => setTimeout(resolve, 1200));
-              job = await call(`/rl/jobs/${job.job_id}`);
-              $("rl-output").textContent = JSON.stringify(job, null, 2);
-            }
-          }
           await refreshRlOutput(response.job.job_id);
         } finally {
           clearBusy();
@@ -798,6 +799,15 @@ logger.log_dir=/tmp/nvidia-tinker-rl-smoke</textarea></label>
         if (!job) throw new Error("No RL job selected.");
         const logs = await call(`/rl/jobs/${job.job_id}/logs?tail_bytes=50000`);
         $("rl-output").textContent = logs.text || "No logs yet.";
+      }
+
+      async function cancelRlJob() {
+        const job = latestRlJob();
+        if (!job) throw new Error("No RL job selected.");
+        const canceled = await call(`/rl/jobs/${job.job_id}/cancel`, { method: "POST" });
+        $("rl-output").textContent = JSON.stringify(canceled, null, 2);
+        toast(`RL job ${canceled.status}.`);
+        await refreshRlOutput(job.job_id);
       }
 
       async function createMissing() {
@@ -971,6 +981,7 @@ logger.log_dir=/tmp/nvidia-tinker-rl-smoke</textarea></label>
       $("rl-launch").onclick = () => handle(() => submitRlJob(false));
       $("rl-refresh").onclick = () => handle(() => refreshRlOutput());
       $("rl-logs").onclick = () => handle(showRlLogs);
+      $("rl-cancel").onclick = () => handle(cancelRlJob);
 
       refresh().catch((error) => toast(error.message, true));
       setInterval(() => refresh().catch(() => {}), 5000);

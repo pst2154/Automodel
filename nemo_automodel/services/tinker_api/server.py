@@ -18,6 +18,7 @@ import json
 import os
 import pathlib
 import queue
+import signal
 import sqlite3
 import subprocess
 import threading
@@ -237,7 +238,9 @@ class RLJobRequest(BaseModel):
     docker_hf_cache_dir: Optional[str] = None
     docker_container_hf_cache_dir: str = "/root/.cache/huggingface"
     docker_user: Optional[str] = None
+    docker_gpus: str = "all"
     container_image: str = "nvcr.io/nvidia/nemo-rl:v0.6.0"
+    max_runtime_seconds: Optional[float] = None
     run_async: bool = True
     dry_run: bool = False
     tenant_id: Optional[str] = None
@@ -260,6 +263,7 @@ class RLJobRecord(BaseModel):
     pid: Optional[int] = None
     returncode: Optional[int] = None
     error: Optional[str] = None
+    max_runtime_seconds: Optional[float] = None
     created_at: str
     updated_at: str
 
@@ -533,6 +537,10 @@ def _build_rl_overrides(request: RLJobRequest) -> list[str]:
 def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str]:
     entrypoint = _resolve_rl_path(repo_dir, request.entrypoint, "entrypoint")
     config_path = _resolve_rl_path(repo_dir, request.config_path, "config_path")
+    if not request.docker_gpus.strip():
+        raise ValueError("docker_gpus must not be empty")
+    if request.max_runtime_seconds is not None and request.max_runtime_seconds <= 0:
+        raise ValueError("max_runtime_seconds must be > 0")
     overrides = _build_rl_overrides(request)
     if request.launcher == "local":
         runner_prefix = ["uv", "run", "python", "-u"] if request.runner == "uv" else ["python", "-u"]
@@ -545,7 +553,7 @@ def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str
         "run",
         "--rm",
         "--gpus",
-        "all",
+        request.docker_gpus.strip(),
         "--ipc=host",
         "--network",
         "host",
@@ -888,6 +896,7 @@ def create_app(
     idempotency_lock = threading.RLock()
     rate_limit_lock = threading.RLock()
     tenant_request_times: dict[str, deque[float]] = {}
+    active_rl_processes: dict[str, subprocess.Popen] = {}
     executor = QueuedExecutor()
     service_metrics = ServiceMetrics()
     worker_manager = ProcessWorkerManager(num_workers=worker_processes) if worker_processes else None
@@ -1039,6 +1048,7 @@ def create_app(
     @app.get("/health")
     def health() -> dict[str, Any]:
         status_counts: dict[str, int] = {}
+        rl_job_status_counts: dict[str, int] = {}
         stale_worker_run_ids = []
         worker_records = worker_manager.snapshot() if worker_manager is not None else []
         running_worker_ids = {record.worker_id for record in worker_records if record.status == "running"}
@@ -1047,6 +1057,10 @@ def create_app(
                 status_counts[record.status] = status_counts.get(record.status, 0) + 1
                 if run_id in runs and worker_manager is not None and record.worker_id not in running_worker_ids:
                     stale_worker_run_ids.append(run_id)
+        with rl_jobs_lock:
+            for job in rl_jobs.values():
+                rl_job_status_counts[job.status] = rl_job_status_counts.get(job.status, 0) + 1
+            active_rl_process_count = len(active_rl_processes)
         return {
             "status": "ok",
             "base_model": base_model,
@@ -1055,6 +1069,8 @@ def create_app(
             "mode": "mixed_lora_single_process",
             "model_execution": "api_process",
             "run_status_counts": status_counts,
+            "rl_job_status_counts": rl_job_status_counts,
+            "active_rl_process_count": active_rl_process_count,
             "stale_worker_run_ids": stale_worker_run_ids,
             "worker_assignment_ready": worker_manager is None or not stale_worker_run_ids,
             "queue_depth": executor.queue_depth(),
@@ -1320,6 +1336,7 @@ def create_app(
             entrypoint=request.entrypoint,
             command=command,
             log_path=str(log_dir / f"{job_id}.log"),
+            max_runtime_seconds=request.max_runtime_seconds,
             created_at=now,
             updated_at=now,
         )
@@ -1357,18 +1374,75 @@ def create_app(
             rl_job_store.save(rl_jobs)
             return job
 
+    def terminate_rl_process(process: subprocess.Popen, sig: signal.Signals = signal.SIGTERM) -> None:
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            pass
+
     def run_rl_job(job_id: str) -> None:
         job = get_rl_job_record(job_id)
         try:
             mark_rl_job(job_id, status="running")
             with pathlib.Path(job.log_path).open("ab") as log_fp:
                 log_fp.write(("Command: " + " ".join(job.command) + "\n\n").encode("utf-8"))
-                process = subprocess.Popen(job.command, cwd=job.repo_dir, stdout=log_fp, stderr=subprocess.STDOUT)
+                process = subprocess.Popen(
+                    job.command,
+                    cwd=job.repo_dir,
+                    stdout=log_fp,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                with rl_jobs_lock:
+                    active_rl_processes[job_id] = process
                 mark_rl_job(job_id, pid=process.pid)
-                returncode = process.wait()
-            mark_rl_job(job_id, status="succeeded" if returncode == 0 else "failed", returncode=returncode)
+                try:
+                    returncode = process.wait(timeout=job.max_runtime_seconds)
+                except subprocess.TimeoutExpired:
+                    terminate_rl_process(process)
+                    try:
+                        returncode = process.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        terminate_rl_process(process, signal.SIGKILL)
+                        returncode = process.wait()
+                    with rl_jobs_lock:
+                        active_rl_processes.pop(job_id, None)
+                    mark_rl_job(
+                        job_id,
+                        status="timed_out",
+                        returncode=returncode,
+                        error=f"RL job exceeded max_runtime_seconds={job.max_runtime_seconds}",
+                    )
+                    return
+            with rl_jobs_lock:
+                active_rl_processes.pop(job_id, None)
+                latest_status = get_rl_job_record(job_id).status
+            if latest_status in {"canceling", "canceled"}:
+                mark_rl_job(job_id, status="canceled", returncode=returncode)
+            else:
+                mark_rl_job(job_id, status="succeeded" if returncode == 0 else "failed", returncode=returncode)
         except Exception as exc:
+            with rl_jobs_lock:
+                active_rl_processes.pop(job_id, None)
             mark_rl_job(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
+
+    def cancel_rl_job_record(job_id: str, http_request: Request) -> RLJobRecord:
+        job = get_rl_job_record(job_id)
+        authorize_tenant(job.tenant_id, http_request)
+        if job.status == "queued":
+            return mark_rl_job(job_id, status="canceled")
+        if job.status != "running":
+            return job
+        job = mark_rl_job(job_id, status="canceling")
+        with rl_jobs_lock:
+            process = active_rl_processes.get(job_id)
+        if process is None:
+            return job
+        try:
+            terminate_rl_process(process)
+        except PermissionError as exc:
+            return mark_rl_job(job_id, error=f"{type(exc).__name__}: {exc}")
+        return get_rl_job_record(job_id)
 
     def get_idempotent_response(operation: str, key: Optional[str], request: BaseModel) -> Optional[dict[str, Any]]:
         if key is None:
@@ -1702,6 +1776,10 @@ def create_app(
             fp.seek(max(0, size - tail_bytes))
             text = fp.read().decode("utf-8", errors="replace")
         return {"job_id": job_id, "text": text}
+
+    @app.post("/rl/jobs/{job_id}/cancel", response_model=RLJobRecord)
+    def cancel_rl_job(job_id: str, http_request: Request) -> RLJobRecord:
+        return cancel_rl_job_record(job_id, http_request)
 
     @app.post("/rl/jobs", response_model=RLJobSubmitResponse)
     def submit_rl_job(request: RLJobRequest, http_request: Request) -> RLJobSubmitResponse:
