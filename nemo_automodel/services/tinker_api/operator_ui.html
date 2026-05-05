@@ -6,21 +6,20 @@
     <title>Nemotron-Tinker</title>
     <style>
       :root {
-        --bg: #f4f2eb;
-        --ink: #151515;
-        --muted: #63615b;
-        --line: #25231f;
-        --panel: #fffdf6;
-        --panel-2: #ebe5d7;
-        --green: #2f7d56;
-        --green-2: #dceee2;
-        --blue: #255e9c;
-        --blue-2: #dce8f6;
-        --red: #a93d36;
-        --red-2: #f4dddd;
-        --gold: #c88d2c;
-        --gold-2: #f4e7c7;
-        --shadow: 0 18px 42px rgba(25, 23, 19, 0.13);
+        --bg: #f7f4ec;
+        --ink: #171717;
+        --muted: #69645a;
+        --panel: #fffdf7;
+        --line: #24211d;
+        --green: #27734f;
+        --green-soft: #dceee3;
+        --blue: #245f9e;
+        --blue-soft: #dde9f7;
+        --gold: #c48b2c;
+        --gold-soft: #f5e5bd;
+        --red: #ab4039;
+        --red-soft: #f5ddda;
+        --shadow: 0 18px 48px rgba(28, 25, 21, 0.14);
       }
 
       * {
@@ -29,14 +28,9 @@
 
       body {
         margin: 0;
-        min-height: 100vh;
         color: var(--ink);
-        background:
-          linear-gradient(135deg, rgba(37, 35, 31, 0.06) 25%, transparent 25%) 0 0 / 22px 22px,
-          linear-gradient(315deg, rgba(37, 35, 31, 0.045) 25%, transparent 25%) 0 0 / 22px 22px,
-          var(--bg);
-        font-family: Avenir Next, Optima, Segoe UI, sans-serif;
-        letter-spacing: 0;
+        background: var(--bg);
+        font-family: Avenir Next, Segoe UI, sans-serif;
       }
 
       button,
@@ -46,19 +40,20 @@
       }
 
       button {
-        min-height: 38px;
-        border: 1px solid var(--line);
-        border-radius: 7px;
-        padding: 8px 12px;
+        min-height: 46px;
+        border: 2px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 14px;
         color: var(--ink);
         background: var(--panel);
-        box-shadow: 3px 3px 0 var(--line);
+        box-shadow: 4px 4px 0 var(--line);
         cursor: pointer;
+        font-weight: 800;
       }
 
       button:hover:not(:disabled) {
         transform: translate(1px, 1px);
-        box-shadow: 2px 2px 0 var(--line);
+        box-shadow: 3px 3px 0 var(--line);
       }
 
       button:disabled {
@@ -68,36 +63,35 @@
       }
 
       button.primary {
-        color: #fffdf6;
+        color: #fffdf7;
         background: var(--green);
       }
 
-      button.secondary {
-        background: var(--gold-2);
+      button.blue {
+        color: #fffdf7;
+        background: var(--blue);
       }
 
-      button.danger {
-        color: #fffdf6;
+      button.warn {
+        color: #fffdf7;
         background: var(--red);
       }
 
       input,
       textarea {
         width: 100%;
-        min-height: 38px;
-        border: 1px solid var(--line);
-        border-radius: 7px;
-        padding: 8px 10px;
-        color: var(--ink);
+        min-height: 42px;
+        border: 2px solid var(--line);
+        border-radius: 8px;
+        padding: 9px 10px;
         background: #fffefa;
+        color: var(--ink);
       }
 
       textarea {
-        min-height: 112px;
+        min-height: 92px;
         resize: vertical;
-        font-family: Cascadia Code, Menlo, monospace;
-        font-size: 12px;
-        line-height: 1.45;
+        line-height: 1.4;
       }
 
       label {
@@ -105,42 +99,34 @@
         gap: 6px;
         color: var(--muted);
         font-size: 12px;
-        font-weight: 800;
+        font-weight: 900;
         text-transform: uppercase;
       }
 
       header {
         display: grid;
         grid-template-columns: 1fr auto;
-        gap: 18px;
+        gap: 20px;
         align-items: end;
-        padding: 22px clamp(16px, 3vw, 34px) 16px;
-        border-bottom: 2px solid var(--line);
-        background: rgba(255, 253, 246, 0.94);
+        padding: 24px clamp(16px, 4vw, 42px) 18px;
+        border-bottom: 3px solid var(--line);
+        background: var(--panel);
       }
 
       h1 {
         margin: 0;
         font-family: Georgia, Times New Roman, serif;
-        font-size: clamp(34px, 5vw, 64px);
+        font-size: clamp(36px, 5vw, 72px);
         line-height: 0.95;
       }
 
       h2,
-      h3 {
+      h3,
+      p {
         margin: 0;
-        letter-spacing: 0;
       }
 
-      h2 {
-        font-size: 18px;
-      }
-
-      h3 {
-        font-size: 15px;
-      }
-
-      .subtitle {
+      .subline {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
@@ -149,36 +135,33 @@
 
       .pill {
         display: inline-flex;
+        min-height: 30px;
         align-items: center;
-        gap: 6px;
-        min-height: 28px;
         border: 1px solid var(--line);
         border-radius: 999px;
-        padding: 4px 9px;
-        background: var(--panel);
+        padding: 4px 10px;
+        background: #fffefa;
         color: var(--muted);
         font-size: 13px;
       }
 
-      .top-actions {
+      .top {
         display: grid;
-        grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto;
+        grid-template-columns: minmax(180px, 1fr) auto;
         gap: 10px;
-        min-width: min(680px, 100%);
+        min-width: min(520px, 100%);
       }
 
       main {
         display: grid;
-        grid-template-columns: minmax(320px, 0.9fr) minmax(440px, 1.1fr);
         gap: 18px;
-        padding: 18px clamp(16px, 3vw, 34px) 34px;
+        padding: 18px clamp(16px, 4vw, 42px) 36px;
       }
 
-      section,
-      .card {
-        border: 2px solid var(--line);
-        border-radius: 8px;
-        background: rgba(255, 253, 246, 0.96);
+      section {
+        border: 3px solid var(--line);
+        border-radius: 10px;
+        background: rgba(255, 253, 247, 0.97);
         box-shadow: var(--shadow);
       }
 
@@ -187,225 +170,142 @@
         justify-content: space-between;
         gap: 12px;
         align-items: center;
-        padding: 12px 14px;
-        border-bottom: 2px solid var(--line);
-        background: var(--panel-2);
+        padding: 13px 15px;
+        border-bottom: 3px solid var(--line);
+        background: var(--gold-soft);
       }
 
       .body {
-        padding: 14px;
+        display: grid;
+        gap: 14px;
+        padding: 15px;
       }
 
-      .stack {
+      .steps {
         display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 12px;
       }
 
-      .grid-2 {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-      }
-
-      .grid-3 {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
-      }
-
-      .run-card {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 12px;
+      .step {
+        min-height: 120px;
+        border: 2px solid var(--line);
+        border-radius: 10px;
+        padding: 14px;
         background: #fffefa;
       }
 
-      .run-card.selected {
-        outline: 3px solid var(--green);
-        background: var(--green-2);
+      .step.done {
+        background: var(--green-soft);
       }
 
-      .run-card.detached {
-        opacity: 0.55;
+      .step.active {
+        background: var(--gold-soft);
       }
 
-      .run-title {
+      .step b {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 22px;
+      }
+
+      .big-actions {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .two {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .three {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .adapter {
+        border: 2px solid var(--line);
+        border-radius: 10px;
+        padding: 14px;
+        background: #fffefa;
+      }
+
+      .adapter.ready {
+        background: var(--green-soft);
+      }
+
+      .adapter h3 {
         display: flex;
         justify-content: space-between;
-        gap: 10px;
-        align-items: start;
-      }
-
-      .run-title strong {
-        font-size: 18px;
-      }
-
-      .small {
-        color: var(--muted);
-        font-size: 12px;
+        gap: 12px;
+        align-items: center;
+        font-size: 22px;
       }
 
       .status {
         border: 1px solid var(--line);
         border-radius: 999px;
-        padding: 3px 8px;
-        background: var(--gold-2);
+        padding: 3px 9px;
+        background: var(--blue-soft);
         font-size: 12px;
-        font-weight: 800;
       }
 
-      .status.ready,
-      .status.created,
-      .status.completed {
-        background: var(--green-2);
-      }
-
-      .status.running,
-      .status.queued,
-      .status.optimizing,
-      .status.saving {
-        background: var(--blue-2);
-      }
-
-      .status.failed,
-      .status.detached,
-      .status.canceled {
-        background: var(--red-2);
-      }
-
-      .metrics {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 8px;
-      }
-
-      .metric {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 10px;
-        background: #fffefa;
-      }
-
-      .metric b {
-        display: block;
-        font-size: 26px;
-        line-height: 1;
-      }
-
-      .metric span {
+      .tiny {
         color: var(--muted);
         font-size: 12px;
       }
 
-      .workspace-chips,
-      .actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
-
-      .chip {
-        min-height: 30px;
-        box-shadow: none;
-        padding: 5px 9px;
-        background: #fffefa;
-      }
-
-      .chip.active {
-        color: #fffdf6;
-        background: var(--blue);
-      }
-
-      .primary-flow {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 10px;
-      }
-
-      .flow-step {
-        min-height: 108px;
-        border: 2px solid var(--line);
-        border-radius: 8px;
-        padding: 12px;
-        background: #fffefa;
-      }
-
-      .flow-step.done {
-        background: var(--green-2);
-      }
-
-      .flow-step.active {
-        background: var(--gold-2);
-      }
-
-      .flow-step b {
-        display: block;
-        margin-bottom: 8px;
-        font-size: 18px;
-      }
-
       .output {
-        min-height: 230px;
-        max-height: 420px;
-        overflow: auto;
-        margin: 0;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 12px;
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .sample {
+        min-height: 210px;
+        border: 2px solid var(--line);
+        border-radius: 10px;
+        padding: 14px;
         background: #171716;
-        color: #fffdf6;
-        font-family: Cascadia Code, Menlo, monospace;
-        font-size: 12px;
-        line-height: 1.45;
+        color: #fffdf7;
+        white-space: pre-wrap;
+      }
+
+      .sample h3 {
+        margin-bottom: 10px;
+        color: #f7d583;
       }
 
       details {
-        border: 1px solid var(--line);
-        border-radius: 8px;
+        border: 2px solid var(--line);
+        border-radius: 10px;
         background: #fffefa;
       }
 
       summary {
         cursor: pointer;
-        padding: 10px 12px;
-        font-weight: 800;
+        padding: 12px 14px;
+        font-weight: 900;
       }
 
-      details .inside {
+      .advanced {
         display: grid;
         gap: 12px;
-        padding: 0 12px 12px;
-      }
-
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-      }
-
-      th,
-      td {
-        padding: 8px;
-        border-bottom: 1px solid rgba(37, 35, 31, 0.22);
-        text-align: left;
-        vertical-align: top;
-      }
-
-      th {
-        color: var(--muted);
-        font-size: 11px;
-        text-transform: uppercase;
+        padding: 0 14px 14px;
       }
 
       .toast {
         position: fixed;
         right: 18px;
         bottom: 18px;
-        z-index: 5;
-        max-width: min(460px, calc(100vw - 36px));
-        border: 2px solid var(--line);
-        border-radius: 8px;
-        padding: 12px;
+        max-width: min(520px, calc(100vw - 36px));
+        border: 3px solid var(--line);
+        border-radius: 10px;
+        padding: 14px;
         background: var(--panel);
         box-shadow: var(--shadow);
         transform: translateY(150%);
@@ -417,28 +317,20 @@
       }
 
       .toast.error {
-        background: var(--red-2);
+        background: var(--red-soft);
       }
 
-      @media (max-width: 1080px) {
+      @media (max-width: 980px) {
         header,
-        main,
-        .primary-flow {
+        .steps,
+        .big-actions,
+        .two,
+        .output {
           grid-template-columns: 1fr;
         }
 
-        .top-actions,
-        .metrics,
-        .grid-3 {
-          grid-template-columns: 1fr 1fr;
-        }
-      }
-
-      @media (max-width: 640px) {
-        .top-actions,
-        .metrics,
-        .grid-2,
-        .grid-3 {
+        .top,
+        .three {
           grid-template-columns: 1fr;
         }
       }
@@ -448,131 +340,87 @@
     <header>
       <div>
         <h1>Nemotron-Tinker</h1>
-        <div class="subtitle">
-          <span id="health-pill" class="pill">Service: checking</span>
-          <span id="model-pill" class="pill">Model: -</span>
-          <span id="tenant-pill" class="pill">Workspace: all</span>
+        <div class="subline">
+          <span id="health" class="pill">Service: checking</span>
+          <span id="model" class="pill">Model: -</span>
+          <span id="workspace-pill" class="pill">Workspace: -</span>
         </div>
       </div>
-      <div class="top-actions">
-        <label>Workspace<input id="tenant" placeholder="tenant-a" /></label>
-        <label>API root<input id="api-root" value="" /></label>
-        <button id="refresh" class="secondary">Refresh</button>
+      <div class="top">
+        <label>Workspace<input id="workspace" value="tenant-a" /></label>
+        <button id="refresh">Refresh</button>
       </div>
     </header>
 
     <main>
       <section>
         <div class="section-head">
-          <h2>Happy Path</h2>
-          <button id="reset-view">Clear Workspace</button>
+          <h2>Do This In Order</h2>
+          <button id="new-workspace">New Clean Workspace</button>
         </div>
-        <div class="body stack">
-          <div class="primary-flow">
-            <div id="flow-workspace" class="flow-step active">
-              <b>1. Workspace</b>
-              <div class="small" id="workspace-summary">Pick or type one name.</div>
-            </div>
-            <div id="flow-create" class="flow-step">
-              <b>2. Adapters</b>
-              <div class="small" id="create-summary">Create Atlas and Borealis.</div>
-            </div>
-            <div id="flow-train" class="flow-step">
-              <b>3. Train</b>
-              <div class="small" id="train-summary">Train each adapter on its own task.</div>
-            </div>
-            <div id="flow-sample" class="flow-step">
-              <b>4. Sample</b>
-              <div class="small" id="sample-summary">Compare both adapters.</div>
-            </div>
+        <div class="body">
+          <div class="steps">
+            <div id="step-1" class="step active"><b>1</b>Pick a workspace.</div>
+            <div id="step-2" class="step"><b>2</b>Create two LoRAs.</div>
+            <div id="step-3" class="step"><b>3</b>Train both on different tasks.</div>
+            <div id="step-4" class="step"><b>4</b>Sample each LoRA.</div>
           </div>
-
-          <div>
-            <h3>Existing Workspaces</h3>
-            <div id="workspace-chips" class="workspace-chips" style="margin-top: 8px"></div>
+          <div class="big-actions">
+            <button id="create-run" class="primary">Create 2 LoRAs</button>
+            <button id="train-both" class="primary">Train 2 LoRAs</button>
+            <button id="sample-atlas" class="blue">Sample Atlas</button>
+            <button id="sample-borealis" class="blue">Sample Borealis</button>
           </div>
-
-          <div class="grid-2">
-            <label>Adapter A Name<input id="adapter-a-name" value="atlas" /></label>
-            <label>Adapter B Name<input id="adapter-b-name" value="borealis" /></label>
-          </div>
-          <div class="grid-2">
-            <label>
-              Atlas Task Prompt
-              <textarea id="task-a-prompt">Route code: ATLAS
-Answer:</textarea>
-            </label>
-            <label>
-              Atlas Task Answer
-              <textarea id="task-a-completion"> Use the atlas adapter for maps, routes, and navigation planning.</textarea>
-            </label>
-          </div>
-          <div class="grid-2">
-            <label>
-              Borealis Task Prompt
-              <textarea id="task-b-prompt">Route code: BOREALIS
-Answer:</textarea>
-            </label>
-            <label>
-              Borealis Task Answer
-              <textarea id="task-b-completion"> Use the borealis adapter for aurora, weather, and northern sky reports.</textarea>
-            </label>
-          </div>
-          <div class="actions">
-            <button id="create-run" class="primary">Create Missing Adapters</button>
-            <button id="train-both" class="primary">Train Both</button>
-            <button id="sample-a" class="secondary">Sample Atlas</button>
-            <button id="sample-b" class="secondary">Sample Borealis</button>
-          </div>
-
-          <div class="metrics">
-            <div class="metric"><b id="metric-runs">0</b><span>resident</span></div>
-            <div class="metric"><b id="metric-trained">0</b><span>trained</span></div>
-            <div class="metric"><b id="metric-jobs">0</b><span>jobs</span></div>
-            <div class="metric"><b id="metric-failures">0</b><span>failures</span></div>
-          </div>
-
-          <div id="run-cards" class="stack"></div>
         </div>
       </section>
 
       <section>
         <div class="section-head">
-          <h2>Run Controls</h2>
-          <div class="actions">
-            <button id="sample-selected">Sample Selected</button>
-            <button id="save-selected">Save Selected</button>
+          <h2>The Two Jobs</h2>
+          <span class="tiny">Atlas and Borealis train on different text.</span>
+        </div>
+        <div class="body">
+          <div class="two">
+            <div id="atlas-card" class="adapter">
+              <h3>Atlas <span id="atlas-status" class="status">missing</span></h3>
+              <p class="tiny" id="atlas-meta">No run yet.</p>
+              <label>Atlas prompt<textarea id="atlas-prompt">Route code: ATLAS
+Answer:</textarea></label>
+              <label>Atlas answer<textarea id="atlas-answer"> Use the atlas adapter for maps, routes, and navigation planning.</textarea></label>
+            </div>
+            <div id="borealis-card" class="adapter">
+              <h3>Borealis <span id="borealis-status" class="status">missing</span></h3>
+              <p class="tiny" id="borealis-meta">No run yet.</p>
+              <label>Borealis prompt<textarea id="borealis-prompt">Route code: BOREALIS
+Answer:</textarea></label>
+              <label>Borealis answer<textarea id="borealis-answer"> Use the borealis adapter for aurora, weather, and northern sky reports.</textarea></label>
+            </div>
+          </div>
+          <div class="three">
+            <label>Training steps<input id="steps" type="number" min="1" value="20" /></label>
+            <label>Learning rate<input id="lr" value="0.0005" /></label>
+            <label>Max train tokens<input id="max-tokens" type="number" min="8" value="64" /></label>
           </div>
         </div>
-        <div class="body stack">
-          <div class="grid-3">
-            <label>Steps<input id="steps" type="number" min="1" value="2" /></label>
-            <label>Learning Rate<input id="learning-rate" value="0.0005" /></label>
-            <label>Max Train Tokens<input id="max-train-tokens" type="number" min="8" value="64" /></label>
-          </div>
-          <label>Save Name<input id="save-name" value="operator-save" /></label>
-          <label>Prompt<input id="prompt" value="Write one concise sentence about adapter routing." /></label>
-          <pre id="response" class="output">{}</pre>
+      </section>
 
+      <section>
+        <div class="section-head">
+          <h2>Results</h2>
+          <span class="tiny">Sample buttons use the correct prompt automatically.</span>
+        </div>
+        <div class="body">
+          <div class="output">
+            <div id="atlas-output" class="sample"><h3>Atlas output</h3>Not sampled yet.</div>
+            <div id="borealis-output" class="sample"><h3>Borealis output</h3>Not sampled yet.</div>
+          </div>
           <details>
-            <summary>Advanced</summary>
-            <div class="inside">
-              <div class="actions">
-                <button id="gradient-only">Compute Gradients Only</button>
-                <button id="train-async">Queue Training</button>
-                <button id="detach-selected" class="danger">Detach Selected</button>
-                <button id="workers">Workers</button>
-              </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Job</th>
-                    <th>Status</th>
-                    <th>Progress</th>
-                  </tr>
-                </thead>
-                <tbody id="jobs"></tbody>
-              </table>
+            <summary>Advanced / raw details</summary>
+            <div class="advanced">
+              <button id="sample-both">Sample Both</button>
+              <button id="save-both">Save Both</button>
+              <button id="detach-both" class="warn">Detach Both</button>
+              <pre id="raw" class="sample">Raw responses show up here.</pre>
             </div>
           </details>
         </div>
@@ -582,432 +430,232 @@ Answer:</textarea>
     <div id="toast" class="toast"></div>
 
     <script>
-      const state = {
-        health: null,
-        metrics: null,
-        runs: [],
-        allRuns: [],
-        jobs: [],
-        selectedRun: null,
-        lastToast: null,
-      };
-
+      const state = { health: null, runs: [], jobs: [], metrics: null, toastTimer: null };
       const $ = (id) => document.getElementById(id);
 
       function apiRoot() {
-        return $("api-root").value.trim() || window.location.origin;
+        return window.location.origin;
       }
 
-      function tenant() {
-        return $("tenant").value.trim();
+      function workspace() {
+        return $("workspace").value.trim();
       }
 
-      function headers(scoped = true) {
-        const result = { "Content-Type": "application/json" };
-        if (scoped && tenant()) result["X-Tinker-Tenant-Id"] = tenant();
-        return result;
+      function scopedHeaders() {
+        const headers = { "Content-Type": "application/json" };
+        if (workspace()) headers["X-Tinker-Tenant-Id"] = workspace();
+        return headers;
       }
 
-      function remember() {
-        localStorage.setItem(
-          "nemotronTinker",
-          JSON.stringify({
-            tenant: $("tenant").value,
-            apiRoot: $("api-root").value,
-          }),
-        );
-      }
-
-      function restore() {
-        const saved = JSON.parse(localStorage.getItem("nemotronTinker") || "{}");
-        $("tenant").value = saved.tenant || "";
-        $("api-root").value = saved.apiRoot || "";
-      }
-
-      async function request(path, options = {}, scoped = true) {
-        remember();
+      async function call(path, options = {}, scoped = true) {
         const response = await fetch(`${apiRoot()}${path}`, {
           ...options,
-          headers: { ...headers(scoped), ...(options.headers || {}) },
+          headers: { ...(scoped ? scopedHeaders() : { "Content-Type": "application/json" }), ...(options.headers || {}) },
         });
         const text = await response.text();
         const payload = text ? JSON.parse(text) : {};
-        if (!response.ok) {
-          throw new Error(`${response.status} ${payload.detail || text}`);
-        }
+        if (!response.ok) throw new Error(`${response.status} ${payload.detail || text}`);
         return payload;
-      }
-
-      function show(payload) {
-        $("response").textContent = JSON.stringify(payload, null, 2);
       }
 
       function toast(message, error = false) {
         const node = $("toast");
         node.textContent = message;
         node.className = `toast show${error ? " error" : ""}`;
-        clearTimeout(state.lastToast);
-        state.lastToast = setTimeout(() => {
-          node.className = "toast";
-        }, 4200);
+        clearTimeout(state.toastTimer);
+        state.toastTimer = setTimeout(() => (node.className = "toast"), 3600);
       }
 
-      function activeRuns() {
-        return state.runs.filter((run) => run.status !== "detached");
+      function raw(payload) {
+        $("raw").textContent = JSON.stringify(payload, null, 2);
       }
 
-      function nameMatch(run, wanted) {
-        return (run.name || "").toLowerCase() === wanted.trim().toLowerCase();
+      function runByName(name) {
+        return state.runs.find((run) => (run.name || "").toLowerCase() === name && run.status !== "detached");
       }
 
-      function pairRuns() {
-        const a = state.runs.find((run) => nameMatch(run, $("adapter-a-name").value) && run.status !== "detached");
-        const b = state.runs.find((run) => nameMatch(run, $("adapter-b-name").value) && run.status !== "detached");
-        return { a, b };
+      function atlas() {
+        return runByName("atlas");
       }
 
-      function selectRun(runId) {
-        state.selectedRun = runId;
-        render();
+      function borealis() {
+        return runByName("borealis");
       }
 
-      function classForStatus(status) {
-        return `status ${status || ""}`;
+      function setStep(id, done, active) {
+        $(id).className = `step${done ? " done" : ""}${active ? " active" : ""}`;
       }
 
-      function shortRunId(runId) {
-        return runId ? runId.replace("run_", "") : "";
-      }
-
-      function knownTenants() {
-        const tenants = new Set();
-        state.allRuns.forEach((run) => {
-          if (run.tenant_id) tenants.add(run.tenant_id);
-        });
-        return [...tenants].sort();
-      }
-
-      function renderWorkspaces() {
-        const chips = knownTenants();
-        $("workspace-chips").innerHTML =
-          chips.length === 0
-            ? '<span class="small">No named workspaces yet.</span>'
-            : chips
-                .map(
-                  (name) =>
-                    `<button class="chip ${tenant() === name ? "active" : ""}" data-tenant="${name}">${name}</button>`,
-                )
-                .join("");
-        document.querySelectorAll("[data-tenant]").forEach((button) => {
-          button.addEventListener("click", async () => {
-            $("tenant").value = button.dataset.tenant;
-            await refresh();
-          });
-        });
-      }
-
-      function renderRuns() {
-        const runs = activeRuns();
-        $("run-cards").innerHTML =
-          runs.length === 0
-            ? '<div class="small">No active adapters in this workspace.</div>'
-            : runs
-                .map(
-                  (run) => `
-                    <div class="run-card ${state.selectedRun === run.run_id ? "selected" : ""} ${run.status}" data-run="${run.run_id}">
-                      <div class="run-title">
-                        <div>
-                          <strong>${run.name || "unnamed"}</strong>
-                          <div class="small">${shortRunId(run.run_id)} / ${run.adapter_id}</div>
-                        </div>
-                        <span class="${classForStatus(run.status)}">${run.status}</span>
-                      </div>
-                      <div class="grid-3" style="margin-top: 10px">
-                        <div><div class="small">tenant</div><b>${run.tenant_id || "none"}</b></div>
-                        <div><div class="small">steps</div><b>${run.optimizer_steps}</b></div>
-                        <div><div class="small">loss</div><b>${run.last_loss == null ? "-" : Number(run.last_loss).toFixed(4)}</b></div>
-                      </div>
-                    </div>`,
-                )
-                .join("");
-        document.querySelectorAll("[data-run]").forEach((card) => {
-          card.addEventListener("click", () => selectRun(card.dataset.run));
-        });
-      }
-
-      function renderJobs() {
-        $("jobs").innerHTML =
-          state.jobs.length === 0
-            ? '<tr><td colspan="3" class="small">No jobs yet.</td></tr>'
-            : state.jobs
-                .map(
-                  (job) => `
-                    <tr>
-                      <td>${job.kind}<br><span class="small">${job.job_id}</span></td>
-                      <td><span class="${classForStatus(job.status)}">${job.status}</span></td>
-                      <td>${JSON.stringify(job.progress || {})}</td>
-                    </tr>`,
-                )
-                .join("");
-      }
-
-      function renderFlow() {
-        const hasTenant = Boolean(tenant());
-        const { a, b } = pairRuns();
-        const trained = [a, b].filter((run) => run && run.optimizer_steps > 0).length;
-        const pairReady = Boolean(a && b);
-        const flow = [
-          ["flow-workspace", hasTenant, !hasTenant],
-          ["flow-create", pairReady, hasTenant && !pairReady],
-          ["flow-train", trained === 2, pairReady && trained < 2],
-          ["flow-sample", false, trained === 2],
-        ];
-        flow.forEach(([id, done, active]) => {
-          $(id).className = `flow-step${done ? " done" : ""}${active ? " active" : ""}`;
-        });
-        $("workspace-summary").textContent = hasTenant ? tenant() : "Pick or type one name.";
-        $("create-summary").textContent = pairReady ? "Atlas and Borealis are ready." : "Create Atlas and Borealis.";
-        $("train-summary").textContent = trained
-          ? `${trained}/2 adapters trained.`
-          : "Train each adapter on its own task.";
-        $("sample-summary").textContent = trained === 2 ? "Ready to compare outputs." : "Train first, then sample.";
-      }
-
-      function renderStats() {
-        const failures = Object.values((state.metrics && state.metrics.operations) || {}).reduce(
-          (total, op) => total + (op.failures || 0),
-          0,
-        );
-        $("metric-runs").textContent = activeRuns().length;
-        $("metric-trained").textContent = activeRuns().filter((run) => run.optimizer_steps > 0).length;
-        $("metric-jobs").textContent = state.jobs.length;
-        $("metric-failures").textContent = failures;
-        $("health-pill").textContent = `Service: ${state.health ? state.health.status : "unknown"}`;
-        $("model-pill").textContent = `Model: ${
-          state.health ? String(state.health.base_model).split("/").slice(-1)[0] : "-"
-        }`;
-        $("tenant-pill").textContent = `Workspace: ${tenant() || "all"}`;
-      }
-
-      function renderButtons() {
-        const { a, b } = pairRuns();
-        const pairReady = Boolean(a && b);
-        $("train-both").disabled = !pairReady;
-        $("sample-a").disabled = !a;
-        $("sample-b").disabled = !b;
-        $("sample-selected").disabled = !state.selectedRun;
-        $("save-selected").disabled = !state.selectedRun;
-        $("detach-selected").disabled = !state.selectedRun;
-        $("gradient-only").disabled = !pairReady;
-        $("train-async").disabled = !pairReady;
+      function renderRun(name, run) {
+        const card = $(`${name}-card`);
+        const status = $(`${name}-status`);
+        const meta = $(`${name}-meta`);
+        if (!run) {
+          card.className = "adapter";
+          status.textContent = "missing";
+          meta.textContent = "No run yet.";
+          return;
+        }
+        card.className = "adapter ready";
+        status.textContent = run.optimizer_steps > 0 ? `trained ${run.optimizer_steps}` : run.status;
+        meta.textContent = `${run.run_id} / loss ${run.last_loss == null ? "-" : Number(run.last_loss).toFixed(4)}`;
       }
 
       function render() {
-        renderWorkspaces();
-        renderRuns();
-        renderJobs();
-        renderFlow();
-        renderStats();
-        renderButtons();
+        const a = atlas();
+        const b = borealis();
+        const hasWorkspace = Boolean(workspace());
+        const hasBoth = Boolean(a && b);
+        const trainedBoth = Boolean(a && b && a.optimizer_steps > 0 && b.optimizer_steps > 0);
+
+        $("health").textContent = `Service: ${state.health ? state.health.status : "unknown"}`;
+        $("model").textContent = `Model: ${state.health ? String(state.health.base_model).split("/").pop() : "-"}`;
+        $("workspace-pill").textContent = `Workspace: ${workspace() || "type one"}`;
+        renderRun("atlas", a);
+        renderRun("borealis", b);
+
+        setStep("step-1", hasWorkspace, !hasWorkspace);
+        setStep("step-2", hasBoth, hasWorkspace && !hasBoth);
+        setStep("step-3", trainedBoth, hasBoth && !trainedBoth);
+        setStep("step-4", false, trainedBoth);
+
+        $("create-run").disabled = !hasWorkspace;
+        $("train-both").disabled = !hasBoth;
+        $("sample-atlas").disabled = !a;
+        $("sample-borealis").disabled = !b;
+        $("sample-both").disabled = !hasBoth;
+        $("save-both").disabled = !hasBoth;
+        $("detach-both").disabled = !hasBoth;
       }
 
       async function refresh() {
-        try {
-          const [health, allRuns, scopedRuns, jobs, metrics] = await Promise.all([
-            request("/health", {}, false),
-            request("/runs", {}, false),
-            request("/runs"),
-            request("/jobs"),
-            request("/metrics", {}, false),
-          ]);
-          state.health = health;
-          state.allRuns = allRuns;
-          state.runs = scopedRuns;
-          state.jobs = jobs;
-          state.metrics = metrics;
-          if (!state.runs.some((run) => run.run_id === state.selectedRun)) {
-            const first = activeRuns()[0];
-            state.selectedRun = first ? first.run_id : null;
-          }
-          render();
-        } catch (error) {
-          toast(error.message, true);
+        state.health = await call("/health", {}, false);
+        state.runs = await call("/runs");
+        state.jobs = await call("/jobs");
+        state.metrics = await call("/metrics", {}, false);
+        render();
+      }
+
+      async function createMissing() {
+        if (!workspace()) {
+          toast("Type a workspace first.", true);
+          $("workspace").focus();
+          return;
         }
+        const created = [];
+        if (!atlas()) created.push(await call("/runs", { method: "POST", body: JSON.stringify({ name: "atlas" }) }));
+        if (!borealis()) created.push(await call("/runs", { method: "POST", body: JSON.stringify({ name: "borealis" }) }));
+        raw({ created });
+        toast(created.length ? "Created Atlas and/or Borealis." : "Both LoRAs already exist.");
+        await refresh();
       }
 
       async function sftDatum(prompt, completion) {
-        return request(
+        return call(
           "/datasets/sft_datum",
           {
             method: "POST",
             body: JSON.stringify({
               prompt,
               completion,
-              max_tokens: Number($("max-train-tokens").value),
+              max_tokens: Number($("max-tokens").value),
             }),
           },
           false,
         );
       }
 
-      async function taskBatches(a, b) {
+      async function batches() {
+        const a = atlas();
+        const b = borealis();
+        if (!a || !b) throw new Error("Create both LoRAs first.");
         const [aDatum, bDatum] = await Promise.all([
-          sftDatum($("task-a-prompt").value, $("task-a-completion").value),
-          sftDatum($("task-b-prompt").value, $("task-b-completion").value),
+          sftDatum($("atlas-prompt").value, $("atlas-answer").value),
+          sftDatum($("borealis-prompt").value, $("borealis-answer").value),
         ]);
-        return {
-          [a.run_id]: [aDatum],
-          [b.run_id]: [bDatum],
-        };
+        return { [a.run_id]: [aDatum], [b.run_id]: [bDatum] };
       }
 
-      async function createOne(name) {
-        return request("/runs", {
+      async function trainBoth() {
+        const result = await call("/train_steps", {
           method: "POST",
-          body: JSON.stringify({ name }),
+          body: JSON.stringify({
+            batches: await batches(),
+            steps: Number($("steps").value),
+            learning_rate: Number($("lr").value),
+          }),
         });
-      }
-
-      async function createMissingAdapters() {
-        if (!tenant()) {
-          toast("Type a workspace name first.", true);
-          $("tenant").focus();
-          return;
-        }
-        const { a, b } = pairRuns();
-        const created = [];
-        if (!a) created.push(await createOne($("adapter-a-name").value || "atlas"));
-        if (!b) created.push(await createOne($("adapter-b-name").value || "borealis"));
-        show({ created });
-        toast(created.length ? "Adapters created." : "Both adapters already exist.");
+        raw(result);
+        toast("Training finished.");
         await refresh();
       }
 
-      async function trainBoth(runAsync = false) {
-        const { a, b } = pairRuns();
-        if (!a || !b) {
-          toast("Create both adapters first.", true);
-          return;
-        }
-        const payload = {
-          batches: await taskBatches(a, b),
-          steps: Number($("steps").value),
-          learning_rate: Number($("learning-rate").value),
-          run_async: runAsync,
-        };
-        const result = await request("/train_steps", { method: "POST", body: JSON.stringify(payload) });
-        show(result);
-        toast(runAsync ? "Training queued." : "Training finished.");
-        await refresh();
+      function visibleText(result) {
+        return result.output && result.output.text ? result.output.text : JSON.stringify(result, null, 2);
       }
 
-      async function gradientOnly() {
-        const { a, b } = pairRuns();
-        if (!a || !b) {
-          toast("Create both adapters first.", true);
-          return;
-        }
-        const result = await request("/mixed_forward_backward", {
+      async function sample(which) {
+        const run = which === "atlas" ? atlas() : borealis();
+        if (!run) throw new Error(`Create ${which} first.`);
+        const prompt = which === "atlas" ? $("atlas-prompt").value : $("borealis-prompt").value;
+        const result = await call(`/runs/${run.run_id}/sample`, {
           method: "POST",
-          body: JSON.stringify({ batches: await taskBatches(a, b) }),
+          body: JSON.stringify({ prompt, max_new_tokens: 64 }),
         });
-        show(result);
-        toast("Gradients computed. Weights were not updated.");
+        $(`${which}-output`).innerHTML = `<h3>${which[0].toUpperCase() + which.slice(1)} output</h3>${visibleText(result)}`;
+        raw(result);
+        toast(`Sampled ${which}.`);
         await refresh();
       }
 
-      async function sampleRun(run) {
-        const result = await request(`/runs/${run.run_id}/sample`, {
-          method: "POST",
-          body: JSON.stringify({ prompt: $("prompt").value, max_new_tokens: 64 }),
-        });
-        show(result);
-        toast(`Sampled ${run.name || run.run_id}.`);
+      async function saveBoth() {
+        const results = [];
+        if (atlas()) results.push(await call(`/runs/${atlas().run_id}/save`, { method: "POST", body: JSON.stringify({ name: "atlas-ui" }) }));
+        if (borealis()) results.push(await call(`/runs/${borealis().run_id}/save`, { method: "POST", body: JSON.stringify({ name: "borealis-ui" }) }));
+        raw({ saved: results });
+        toast("Saved both LoRAs.");
         await refresh();
       }
 
-      async function sampleNamed(which) {
-        const pair = pairRuns();
-        const run = pair[which];
-        if (!run) {
-          toast("Create that adapter first.", true);
-          return;
+      async function detachBoth() {
+        const results = [];
+        if (atlas()) results.push(await call(`/runs/${atlas().run_id}/detach`, { method: "POST", body: "{}" }));
+        if (borealis()) results.push(await call(`/runs/${borealis().run_id}/detach`, { method: "POST", body: "{}" }));
+        raw({ detached: results });
+        toast("Detached both LoRAs.");
+        await refresh();
+      }
+
+      async function handle(fn) {
+        try {
+          await fn();
+        } catch (error) {
+          toast(error.message, true);
+          raw({ error: error.message });
         }
-        await sampleRun(run);
       }
 
-      async function sampleSelected() {
-        const run = state.runs.find((item) => item.run_id === state.selectedRun);
-        if (!run) {
-          toast("Select an adapter first.", true);
-          return;
-        }
-        await sampleRun(run);
-      }
-
-      async function saveSelected() {
-        if (!state.selectedRun) {
-          toast("Select an adapter first.", true);
-          return;
-        }
-        const result = await request(`/runs/${state.selectedRun}/save`, {
-          method: "POST",
-          body: JSON.stringify({ name: $("save-name").value }),
-        });
-        show(result);
-        toast("Adapter saved.");
-        await refresh();
-      }
-
-      async function detachSelected() {
-        if (!state.selectedRun) {
-          toast("Select an adapter first.", true);
-          return;
-        }
-        const result = await request(`/runs/${state.selectedRun}/detach`, {
-          method: "POST",
-          body: JSON.stringify({}),
-        });
-        show(result);
-        toast("Adapter detached.");
-        await refresh();
-      }
-
-      async function workers() {
-        show(await request("/workers", {}, false));
-      }
-
-      function bind(id, fn) {
-        $(id).addEventListener("click", async () => {
-          try {
-            await fn();
-          } catch (error) {
-            toast(error.message, true);
-            show({ error: error.message });
-          }
-        });
-      }
-
-      restore();
-      $("tenant").addEventListener("change", refresh);
-      $("api-root").addEventListener("change", refresh);
-      bind("refresh", refresh);
-      bind("reset-view", async () => {
-        $("tenant").value = "";
-        await refresh();
+      $("refresh").onclick = () => handle(refresh);
+      $("new-workspace").onclick = () => {
+        $("workspace").value = `tenant-${Date.now().toString().slice(-5)}`;
+        $("atlas-output").innerHTML = "<h3>Atlas output</h3>Not sampled yet.";
+        $("borealis-output").innerHTML = "<h3>Borealis output</h3>Not sampled yet.";
+        handle(refresh);
+      };
+      $("workspace").onchange = () => handle(refresh);
+      $("create-run").onclick = () => handle(createMissing);
+      $("train-both").onclick = () => handle(trainBoth);
+      $("sample-atlas").onclick = () => handle(() => sample("atlas"));
+      $("sample-borealis").onclick = () => handle(() => sample("borealis"));
+      $("sample-both").onclick = () => handle(async () => {
+        await sample("atlas");
+        await sample("borealis");
       });
-      bind("create-run", createMissingAdapters);
-      bind("train-both", () => trainBoth(false));
-      bind("train-async", () => trainBoth(true));
-      bind("gradient-only", gradientOnly);
-      bind("sample-a", () => sampleNamed("a"));
-      bind("sample-b", () => sampleNamed("b"));
-      bind("sample-selected", sampleSelected);
-      bind("save-selected", saveSelected);
-      bind("detach-selected", detachSelected);
-      bind("workers", workers);
-      refresh();
-      setInterval(refresh, 5000);
+      $("save-both").onclick = () => handle(saveBoth);
+      $("detach-both").onclick = () => handle(detachBoth);
+
+      refresh().catch((error) => toast(error.message, true));
+      setInterval(() => refresh().catch(() => {}), 5000);
     </script>
   </body>
 </html>
