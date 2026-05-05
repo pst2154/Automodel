@@ -789,6 +789,8 @@ def create_app(
     api_key: Optional[str] = None,
     max_resident_adapters: Optional[int] = None,
     max_runs_per_tenant: Optional[int] = None,
+    max_concurrent_rl_jobs: Optional[int] = None,
+    max_concurrent_rl_jobs_per_tenant: Optional[int] = None,
     tenant_rate_limit_per_minute: Optional[int] = None,
     mixed_lora_backend: MixedLoraBackend = "loop",
     use_triton_lora: bool = False,
@@ -805,6 +807,10 @@ def create_app(
         raise ValueError(f"Unknown metadata backend: {metadata_backend}")
     if max_runs_per_tenant is not None and max_runs_per_tenant <= 0:
         raise ValueError("max_runs_per_tenant must be positive")
+    if max_concurrent_rl_jobs is not None and max_concurrent_rl_jobs <= 0:
+        raise ValueError("max_concurrent_rl_jobs must be positive")
+    if max_concurrent_rl_jobs_per_tenant is not None and max_concurrent_rl_jobs_per_tenant <= 0:
+        raise ValueError("max_concurrent_rl_jobs_per_tenant must be positive")
     if tenant_rate_limit_per_minute is not None and tenant_rate_limit_per_minute <= 0:
         raise ValueError("tenant_rate_limit_per_minute must be positive")
     if worker_processes < 0:
@@ -1090,6 +1096,8 @@ def create_app(
             "auth_enabled": expected_api_key is not None,
             "max_resident_adapters": max_resident_adapters,
             "max_runs_per_tenant": max_runs_per_tenant,
+            "max_concurrent_rl_jobs": max_concurrent_rl_jobs,
+            "max_concurrent_rl_jobs_per_tenant": max_concurrent_rl_jobs_per_tenant,
             "tenant_rate_limit_per_minute": tenant_rate_limit_per_minute,
             "mixed_lora_backend": active_mixed_lora_backend,
             "use_triton_lora": use_triton_lora,
@@ -1242,6 +1250,25 @@ def create_app(
             raise HTTPException(
                 status_code=429,
                 detail=f"Tenant {key!r} resident adapter capacity reached: {resident_count}/{max_runs_per_tenant}",
+            )
+
+    def enforce_rl_job_quota(tenant_id: Optional[str]) -> None:
+        active_statuses = {"queued", "running", "canceling"}
+        key = tenant_key(tenant_id)
+        with rl_jobs_lock:
+            active_jobs = [job for job in rl_jobs.values() if job.status in active_statuses]
+            tenant_active_count = sum(1 for job in active_jobs if tenant_key(job.tenant_id) == key)
+        if max_concurrent_rl_jobs is not None and len(active_jobs) >= max_concurrent_rl_jobs:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Global RL job capacity reached: {len(active_jobs)}/{max_concurrent_rl_jobs}",
+            )
+        if max_concurrent_rl_jobs_per_tenant is not None and tenant_active_count >= max_concurrent_rl_jobs_per_tenant:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Tenant {key!r} RL job capacity reached: {tenant_active_count}/{max_concurrent_rl_jobs_per_tenant}"
+                ),
             )
 
     def get_record(run_id: str) -> RunRecord:
@@ -1794,6 +1821,9 @@ def create_app(
         existing = get_idempotent_response("rl_jobs", request.idempotency_key, request)
         if existing is not None:
             return existing
+        if not request.dry_run:
+            enforce_tenant_rate_limit(request.tenant_id, "rl_jobs")
+            enforce_rl_job_quota(request.tenant_id)
         repo_dir_text = request.repo_dir or rl_repo_dir or os.environ.get("NEMO_RL_REPO_DIR")
         if not repo_dir_text:
             raise HTTPException(

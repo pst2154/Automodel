@@ -355,6 +355,9 @@ host checkout that may be missing submodules.
 - `max_runtime_seconds`: optional wall-clock timeout for the launched RL
   process. The bridge sends `SIGTERM`, waits briefly, then escalates to
   `SIGKILL` if the process group does not exit.
+- `max_concurrent_rl_jobs` and `max_concurrent_rl_jobs_per_tenant` are server
+  startup options for shared-GPU protection. They reject non-dry-run RL
+  submissions with `429` once queued/running/canceling RL jobs hit capacity.
 - `docker_user`: optional host uid/gid. Do not set it for the stock NeMo-RL
   container because its venv Python resolves through `/root`, which is not
   executable by arbitrary scratch UIDs.

@@ -98,6 +98,8 @@ def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch, tmp_path):
     assert health["mixed_lora_backend"] == "triton"
     assert health["metadata_backend"] == "sqlite"
     assert health["max_runs_per_tenant"] is None
+    assert health["max_concurrent_rl_jobs"] is None
+    assert health["max_concurrent_rl_jobs_per_tenant"] is None
     assert health["tenant_rate_limit_per_minute"] is None
     assert health["restore_runs_on_startup"] is False
     assert health["resume_interrupted_jobs_on_startup"] is False
@@ -495,6 +497,67 @@ def test_mixed_lora_server_times_out_nemo_rl_bridge_job(monkeypatch, tmp_path):
     assert job["status"] == "timed_out"
     assert job["returncode"] == -15
     assert "max_runtime_seconds=0.01" in job["error"]
+
+
+def test_mixed_lora_server_limits_concurrent_nemo_rl_bridge_jobs(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    rl_repo = tmp_path / "RL"
+    (rl_repo / "examples" / "configs").mkdir(parents=True)
+    (rl_repo / "examples" / "run_grpo.py").write_text("print('not launched')\n", encoding="utf-8")
+    (rl_repo / "examples" / "configs" / "grpo_math_1B.yaml").write_text("grpo: {}\n", encoding="utf-8")
+
+    processes = []
+
+    class BlockingProcess:
+        def __init__(self, command, **kwargs):
+            self.command = command
+            self.kwargs = kwargs
+            self.pid = 65432
+            self.returncode = None
+            self.done = threading.Event()
+            processes.append(self)
+
+        def wait(self, timeout=None):
+            self.done.wait(timeout=5)
+            return self.returncode
+
+    def fake_killpg(pid, sig):
+        assert sig == server.signal.SIGTERM
+        for process in processes:
+            if process.pid == pid:
+                process.returncode = -15
+                process.done.set()
+
+    monkeypatch.setattr(server.subprocess, "Popen", BlockingProcess)
+    monkeypatch.setattr(server.os, "killpg", fake_killpg)
+
+    app = server.create_app(
+        base_model="fake-model",
+        scratch_dir=tmp_path,
+        rl_repo_dir=str(rl_repo),
+        max_concurrent_rl_jobs_per_tenant=1,
+    )
+    client = fastapi_testclient.TestClient(app)
+    first = client.post(
+        "/rl/jobs",
+        json={"name": "first", "runner": "python", "run_async": True},
+        headers={"X-Tinker-Tenant-Id": "tenant-a"},
+    ).json()["job"]
+
+    for _ in range(50):
+        current = client.get(f"/rl/jobs/{first['job_id']}", headers={"X-Tinker-Tenant-Id": "tenant-a"}).json()
+        if current["status"] == "running":
+            break
+        time.sleep(0.01)
+    response = client.post(
+        "/rl/jobs",
+        json={"name": "second", "runner": "python", "run_async": True},
+        headers={"X-Tinker-Tenant-Id": "tenant-a"},
+    )
+    assert response.status_code == 429
+    assert "RL job capacity reached" in response.json()["detail"]
+
+    client.post(f"/rl/jobs/{first['job_id']}/cancel", headers={"X-Tinker-Tenant-Id": "tenant-a"})
 
 
 def test_mixed_lora_server_runs_local_nemo_rl_bridge_job(monkeypatch, tmp_path):
