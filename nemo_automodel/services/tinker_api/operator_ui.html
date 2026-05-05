@@ -203,6 +203,11 @@
         background: var(--gold-soft);
       }
 
+      .step.busy {
+        background: var(--blue-soft);
+        animation: pulse 1s ease-in-out infinite alternate;
+      }
+
       .step b {
         display: block;
         margin-bottom: 8px;
@@ -320,6 +325,15 @@
         background: var(--red-soft);
       }
 
+      @keyframes pulse {
+        from {
+          box-shadow: inset 0 0 0 rgba(36, 95, 158, 0);
+        }
+        to {
+          box-shadow: inset 0 0 0 999px rgba(36, 95, 158, 0.08);
+        }
+      }
+
       @media (max-width: 980px) {
         header,
         .steps,
@@ -430,7 +444,15 @@ Answer:</textarea></label>
     <div id="toast" class="toast"></div>
 
     <script>
-      const state = { health: null, runs: [], jobs: [], metrics: null, toastTimer: null };
+      const state = {
+        health: null,
+        runs: [],
+        jobs: [],
+        metrics: null,
+        toastTimer: null,
+        busy: null,
+        buttonLabels: {},
+      };
       const $ = (id) => document.getElementById(id);
 
       function apiRoot() {
@@ -486,6 +508,28 @@ Answer:</textarea></label>
         $(id).className = `step${done ? " done" : ""}${active ? " active" : ""}`;
       }
 
+      function setBusy(name, label, buttonId, stepId, outputId) {
+        state.busy = { name, label, buttonId, stepId };
+        if (buttonId) {
+          state.buttonLabels[buttonId] = $(buttonId).textContent;
+          $(buttonId).textContent = label;
+        }
+        if (stepId) $(stepId).className = "step busy";
+        if (outputId) {
+          $(outputId).innerHTML = `<h3>${outputId.startsWith("atlas") ? "Atlas" : "Borealis"} output</h3>${label}`;
+        }
+        render();
+      }
+
+      function clearBusy() {
+        const busy = state.busy;
+        if (busy && busy.buttonId && state.buttonLabels[busy.buttonId]) {
+          $(busy.buttonId).textContent = state.buttonLabels[busy.buttonId];
+        }
+        state.busy = null;
+        render();
+      }
+
       function renderRun(name, run) {
         const card = $(`${name}-card`);
         const status = $(`${name}-status`);
@@ -518,17 +562,22 @@ Answer:</textarea></label>
         setStep("step-2", hasBoth, hasWorkspace && !hasBoth);
         setStep("step-3", trainedBoth, hasBoth && !trainedBoth);
         setStep("step-4", false, trainedBoth);
+        if (state.busy && state.busy.stepId) $(state.busy.stepId).className = "step busy";
 
-        $("create-run").disabled = !hasWorkspace;
-        $("train-both").disabled = !hasBoth;
-        $("sample-atlas").disabled = !a;
-        $("sample-borealis").disabled = !b;
-        $("sample-both").disabled = !hasBoth;
-        $("save-both").disabled = !hasBoth;
-        $("detach-both").disabled = !hasBoth;
+        const disabled = Boolean(state.busy);
+        $("refresh").disabled = disabled;
+        $("new-workspace").disabled = disabled;
+        $("create-run").disabled = disabled || !hasWorkspace;
+        $("train-both").disabled = disabled || !hasBoth;
+        $("sample-atlas").disabled = disabled || !a;
+        $("sample-borealis").disabled = disabled || !b;
+        $("sample-both").disabled = disabled || !hasBoth;
+        $("save-both").disabled = disabled || !hasBoth;
+        $("detach-both").disabled = disabled || !hasBoth;
       }
 
       async function refresh() {
+        if (state.busy) return;
         state.health = await call("/health", {}, false);
         state.runs = await call("/runs");
         state.jobs = await call("/jobs");
@@ -542,12 +591,17 @@ Answer:</textarea></label>
           $("workspace").focus();
           return;
         }
+        setBusy("create", "Creating...", "create-run", "step-2");
         const created = [];
-        if (!atlas()) created.push(await call("/runs", { method: "POST", body: JSON.stringify({ name: "atlas" }) }));
-        if (!borealis()) created.push(await call("/runs", { method: "POST", body: JSON.stringify({ name: "borealis" }) }));
-        raw({ created });
-        toast(created.length ? "Created Atlas and/or Borealis." : "Both LoRAs already exist.");
-        await refresh();
+        try {
+          if (!atlas()) created.push(await call("/runs", { method: "POST", body: JSON.stringify({ name: "atlas" }) }));
+          if (!borealis()) created.push(await call("/runs", { method: "POST", body: JSON.stringify({ name: "borealis" }) }));
+          raw({ created });
+          toast(created.length ? "Created Atlas and/or Borealis." : "Both LoRAs already exist.");
+          await refresh();
+        } finally {
+          clearBusy();
+        }
       }
 
       async function sftDatum(prompt, completion) {
@@ -577,17 +631,22 @@ Answer:</textarea></label>
       }
 
       async function trainBoth() {
-        const result = await call("/train_steps", {
-          method: "POST",
-          body: JSON.stringify({
-            batches: await batches(),
-            steps: Number($("steps").value),
-            learning_rate: Number($("lr").value),
-          }),
-        });
-        raw(result);
-        toast("Training finished.");
-        await refresh();
+        setBusy("train", "Training...", "train-both", "step-3");
+        try {
+          const result = await call("/train_steps", {
+            method: "POST",
+            body: JSON.stringify({
+              batches: await batches(),
+              steps: Number($("steps").value),
+              learning_rate: Number($("lr").value),
+            }),
+          });
+          raw(result);
+          toast("Training finished.");
+          await refresh();
+        } finally {
+          clearBusy();
+        }
       }
 
       function visibleText(result, prompt) {
@@ -605,34 +664,51 @@ Answer:</textarea></label>
       async function sample(which) {
         const run = which === "atlas" ? atlas() : borealis();
         if (!run) throw new Error(`Create ${which} first.`);
+        const buttonId = which === "atlas" ? "sample-atlas" : "sample-borealis";
+        const outputId = `${which}-output`;
+        setBusy(`sample-${which}`, "Sampling...", buttonId, "step-4", outputId);
         const prompt = which === "atlas" ? $("atlas-prompt").value : $("borealis-prompt").value;
-        const result = await call(`/runs/${run.run_id}/sample`, {
-          method: "POST",
-          body: JSON.stringify({ prompt, max_new_tokens: 12, do_sample: false, temperature: 0.0 }),
-        });
-        $(`${which}-output`).innerHTML =
-          `<h3>${which[0].toUpperCase() + which.slice(1)} output</h3>${visibleText(result, prompt)}`;
-        raw(result);
-        toast(`Sampled ${which}.`);
-        await refresh();
+        try {
+          const result = await call(`/runs/${run.run_id}/sample`, {
+            method: "POST",
+            body: JSON.stringify({ prompt, max_new_tokens: 12, do_sample: false, temperature: 0.0 }),
+          });
+          $(outputId).innerHTML =
+            `<h3>${which[0].toUpperCase() + which.slice(1)} output</h3>${visibleText(result, prompt)}`;
+          raw(result);
+          toast(`Sampled ${which}.`);
+          await refresh();
+        } finally {
+          clearBusy();
+        }
       }
 
       async function saveBoth() {
+        setBusy("save", "Saving...", "save-both");
         const results = [];
-        if (atlas()) results.push(await call(`/runs/${atlas().run_id}/save`, { method: "POST", body: JSON.stringify({ name: "atlas-ui" }) }));
-        if (borealis()) results.push(await call(`/runs/${borealis().run_id}/save`, { method: "POST", body: JSON.stringify({ name: "borealis-ui" }) }));
-        raw({ saved: results });
-        toast("Saved both LoRAs.");
-        await refresh();
+        try {
+          if (atlas()) results.push(await call(`/runs/${atlas().run_id}/save`, { method: "POST", body: JSON.stringify({ name: "atlas-ui" }) }));
+          if (borealis()) results.push(await call(`/runs/${borealis().run_id}/save`, { method: "POST", body: JSON.stringify({ name: "borealis-ui" }) }));
+          raw({ saved: results });
+          toast("Saved both LoRAs.");
+          await refresh();
+        } finally {
+          clearBusy();
+        }
       }
 
       async function detachBoth() {
+        setBusy("detach", "Detaching...", "detach-both");
         const results = [];
-        if (atlas()) results.push(await call(`/runs/${atlas().run_id}/detach`, { method: "POST", body: "{}" }));
-        if (borealis()) results.push(await call(`/runs/${borealis().run_id}/detach`, { method: "POST", body: "{}" }));
-        raw({ detached: results });
-        toast("Detached both LoRAs.");
-        await refresh();
+        try {
+          if (atlas()) results.push(await call(`/runs/${atlas().run_id}/detach`, { method: "POST", body: "{}" }));
+          if (borealis()) results.push(await call(`/runs/${borealis().run_id}/detach`, { method: "POST", body: "{}" }));
+          raw({ detached: results });
+          toast("Detached both LoRAs.");
+          await refresh();
+        } finally {
+          clearBusy();
+        }
       }
 
       async function handle(fn) {
