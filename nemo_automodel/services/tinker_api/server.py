@@ -224,6 +224,12 @@ class RLJobRequest(BaseModel):
     config_path: str = "examples/configs/grpo_math_1B.yaml"
     entrypoint: str = "examples/run_grpo.py"
     overrides: list[str] = Field(default_factory=list)
+    num_nodes: Optional[int] = None
+    gpus_per_node: Optional[int] = None
+    tensor_parallel_size: Optional[int] = None
+    pipeline_parallel_size: Optional[int] = None
+    context_parallel_size: Optional[int] = None
+    expert_parallel_size: Optional[int] = None
     launcher: RLLauncher = "local"
     runner: RLRunner = "uv"
     docker_repo_dir: Optional[str] = None
@@ -461,12 +467,76 @@ def _resolve_rl_path(repo_dir: pathlib.Path, relative_path: str, field_name: str
     return candidate
 
 
+def _append_rl_override_if_absent(overrides: list[str], key: str, value: int) -> None:
+    if not any(override.split("=", 1)[0] == key for override in overrides):
+        overrides.append(f"{key}={value}")
+
+
+def _build_rl_overrides(request: RLJobRequest) -> list[str]:
+    overrides = list(request.overrides)
+    topology = {
+        "num_nodes": request.num_nodes,
+        "gpus_per_node": request.gpus_per_node,
+        "tensor_parallel_size": request.tensor_parallel_size,
+        "pipeline_parallel_size": request.pipeline_parallel_size,
+        "context_parallel_size": request.context_parallel_size,
+        "expert_parallel_size": request.expert_parallel_size,
+    }
+    for name, value in topology.items():
+        if value is not None and value < 1:
+            raise ValueError(f"{name} must be >= 1")
+
+    if request.num_nodes is not None:
+        _append_rl_override_if_absent(overrides, "cluster.num_nodes", request.num_nodes)
+    if request.gpus_per_node is not None:
+        _append_rl_override_if_absent(overrides, "cluster.gpus_per_node", request.gpus_per_node)
+    if request.tensor_parallel_size is not None:
+        _append_rl_override_if_absent(
+            overrides, "policy.dtensor_cfg.tensor_parallel_size", request.tensor_parallel_size
+        )
+        _append_rl_override_if_absent(
+            overrides, "policy.megatron_cfg.tensor_model_parallel_size", request.tensor_parallel_size
+        )
+    if request.context_parallel_size is not None:
+        _append_rl_override_if_absent(
+            overrides, "policy.dtensor_cfg.context_parallel_size", request.context_parallel_size
+        )
+        _append_rl_override_if_absent(
+            overrides, "policy.megatron_cfg.context_parallel_size", request.context_parallel_size
+        )
+    if request.pipeline_parallel_size is not None:
+        _append_rl_override_if_absent(
+            overrides, "policy.megatron_cfg.pipeline_model_parallel_size", request.pipeline_parallel_size
+        )
+    if request.expert_parallel_size is not None:
+        _append_rl_override_if_absent(
+            overrides, "policy.megatron_cfg.expert_model_parallel_size", request.expert_parallel_size
+        )
+
+    if request.num_nodes in (None, 1) and request.gpus_per_node is not None:
+        parallel_product = 1
+        for value in (
+            request.tensor_parallel_size,
+            request.pipeline_parallel_size,
+            request.context_parallel_size,
+            request.expert_parallel_size,
+        ):
+            parallel_product *= value or 1
+        if parallel_product > request.gpus_per_node:
+            raise ValueError(
+                "tensor_parallel_size * pipeline_parallel_size * context_parallel_size * "
+                "expert_parallel_size must be <= gpus_per_node for single-node launches"
+            )
+    return overrides
+
+
 def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str]:
     entrypoint = _resolve_rl_path(repo_dir, request.entrypoint, "entrypoint")
     config_path = _resolve_rl_path(repo_dir, request.config_path, "config_path")
+    overrides = _build_rl_overrides(request)
     if request.launcher == "local":
         runner_prefix = ["uv", "run", "python", "-u"] if request.runner == "uv" else ["python", "-u"]
-        return [*runner_prefix, str(entrypoint), "--config", str(config_path), *request.overrides]
+        return [*runner_prefix, str(entrypoint), "--config", str(config_path), *overrides]
     container_repo = request.docker_container_repo_dir.rstrip("/") or "/opt/nemo-rl"
     container_entrypoint = str(pathlib.PurePosixPath(container_repo) / request.entrypoint)
     container_config = str(pathlib.PurePosixPath(container_repo) / request.config_path)
@@ -512,7 +582,7 @@ def _build_rl_command(request: RLJobRequest, repo_dir: pathlib.Path) -> list[str
             container_entrypoint,
             "--config",
             container_config,
-            *request.overrides,
+            *overrides,
         ]
     )
     return command

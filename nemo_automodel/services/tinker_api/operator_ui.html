@@ -524,6 +524,16 @@ Answer:</textarea></label>
             <label>Container image<input id="rl-image" value="nvcr.io/nvidia/nemo-rl:v0.6.0" /></label>
             <label>Job name<input id="rl-name" value="grpo-smoke" /></label>
           </div>
+          <div class="four">
+            <label>Nodes<input id="rl-num-nodes" type="number" min="1" value="1" /></label>
+            <label>GPUs/node<input id="rl-gpus-per-node" type="number" min="1" value="1" /></label>
+            <label>TP<input id="rl-tp" type="number" min="1" value="" placeholder="1" /></label>
+            <label>PP<input id="rl-pp" type="number" min="1" value="" placeholder="1" /></label>
+          </div>
+          <div class="two">
+            <label>CP<input id="rl-cp" type="number" min="1" value="" placeholder="1" /></label>
+            <label>EP<input id="rl-ep" type="number" min="1" value="" placeholder="MoE only" /></label>
+          </div>
           <label>Docker user<input id="rl-docker-user" value="" placeholder="optional: 140045:30" /></label>
           <label>Hydra overrides<textarea id="rl-overrides">policy.dtensor_cfg.lora_cfg.enabled=true
 policy.dtensor_cfg.lora_cfg.dim=8
@@ -716,12 +726,22 @@ logger.log_dir=/tmp/nvidia-tinker-rl-smoke</textarea></label>
       }
 
       function rlPayload(dryRun) {
+        const optionalInt = (id) => {
+          const value = $(id).value.trim();
+          return value ? Number(value) : null;
+        };
         return {
           name: $("rl-name").value.trim() || null,
           repo_dir: $("rl-repo").value.trim() || null,
           config_path: $("rl-config").value.trim(),
           launcher: $("rl-launcher").value,
           runner: $("rl-runner").value,
+          num_nodes: optionalInt("rl-num-nodes"),
+          gpus_per_node: optionalInt("rl-gpus-per-node"),
+          tensor_parallel_size: optionalInt("rl-tp"),
+          pipeline_parallel_size: optionalInt("rl-pp"),
+          context_parallel_size: optionalInt("rl-cp"),
+          expert_parallel_size: optionalInt("rl-ep"),
           container_image: $("rl-image").value.trim(),
           docker_repo_dir: $("rl-docker-repo").value.trim() || null,
           docker_container_repo_dir: $("rl-docker-container-repo").value.trim() || "/opt/nemo-rl",

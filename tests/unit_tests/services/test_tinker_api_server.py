@@ -249,6 +249,67 @@ def test_mixed_lora_server_prepares_nemo_rl_docker_cache_mount(monkeypatch, tmp_
     assert "HF_DATASETS_CACHE=/root/.cache/huggingface/datasets" in command
 
 
+def test_mixed_lora_server_expands_nemo_rl_topology_overrides(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    rl_repo = tmp_path / "RL"
+    (rl_repo / "examples" / "configs").mkdir(parents=True)
+    (rl_repo / "examples" / "run_grpo.py").write_text("print('not launched')\n", encoding="utf-8")
+    (rl_repo / "examples" / "configs" / "grpo_math_1B.yaml").write_text("grpo: {}\n", encoding="utf-8")
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, rl_repo_dir=str(rl_repo))
+    client = fastapi_testclient.TestClient(app)
+
+    response = client.post(
+        "/rl/jobs",
+        json={
+            "name": "dry-run",
+            "launcher": "docker",
+            "runner": "python",
+            "dry_run": True,
+            "num_nodes": 1,
+            "gpus_per_node": 8,
+            "tensor_parallel_size": 2,
+            "pipeline_parallel_size": 2,
+            "context_parallel_size": 1,
+            "expert_parallel_size": 2,
+        },
+    ).json()
+
+    command = response["job"]["command"]
+    assert "cluster.num_nodes=1" in command
+    assert "cluster.gpus_per_node=8" in command
+    assert "policy.dtensor_cfg.tensor_parallel_size=2" in command
+    assert "policy.megatron_cfg.tensor_model_parallel_size=2" in command
+    assert "policy.megatron_cfg.pipeline_model_parallel_size=2" in command
+    assert "policy.dtensor_cfg.context_parallel_size=1" in command
+    assert "policy.megatron_cfg.context_parallel_size=1" in command
+    assert "policy.megatron_cfg.expert_model_parallel_size=2" in command
+
+
+def test_mixed_lora_server_rejects_oversubscribed_single_node_topology(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    rl_repo = tmp_path / "RL"
+    (rl_repo / "examples" / "configs").mkdir(parents=True)
+    (rl_repo / "examples" / "run_grpo.py").write_text("print('not launched')\n", encoding="utf-8")
+    (rl_repo / "examples" / "configs" / "grpo_math_1B.yaml").write_text("grpo: {}\n", encoding="utf-8")
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path, rl_repo_dir=str(rl_repo))
+    client = fastapi_testclient.TestClient(app)
+
+    response = client.post(
+        "/rl/jobs",
+        json={
+            "launcher": "docker",
+            "dry_run": True,
+            "gpus_per_node": 8,
+            "tensor_parallel_size": 4,
+            "pipeline_parallel_size": 2,
+            "expert_parallel_size": 2,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "must be <= gpus_per_node" in response.json()["detail"]
+
+
 def test_mixed_lora_server_runs_local_nemo_rl_bridge_job(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
     rl_repo = tmp_path / "RL"

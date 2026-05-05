@@ -260,6 +260,27 @@ curl -s http://127.0.0.1:18080/rl/jobs \
   }'
 ```
 
+Optional topology fields can generate common NeMo-RL Hydra overrides without
+hand-editing the override list:
+
+```json
+{
+  "num_nodes": 1,
+  "gpus_per_node": 8,
+  "tensor_parallel_size": 2,
+  "pipeline_parallel_size": 2,
+  "context_parallel_size": 1,
+  "expert_parallel_size": 2
+}
+```
+
+These expand to `cluster.*`, `policy.dtensor_cfg.*`, and
+`policy.megatron_cfg.*` overrides. The bridge validates that
+`TP * PP * CP * EP <= gpus_per_node` for single-node launches. Multi-node
+topologies can be represented in the command config, but V1 does not yet
+orchestrate multi-host rendezvous, rank placement, Slurm, or Ray cluster
+lifecycle.
+
 Run locally from a mounted NeMo-RL checkout when the API process has the NeMo-RL
 environment available:
 
