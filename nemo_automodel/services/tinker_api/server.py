@@ -257,6 +257,14 @@ class WorkerEchoRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class WorkerRunsResponse(BaseModel):
+    """Runs currently attached to one supervised worker."""
+
+    worker: WorkerProcessRecord
+    runs: list[dict[str, Any]] = Field(default_factory=list)
+    assigned_run_count: int = 0
+
+
 def _datum_from_request(request: DatumRequest) -> Datum:
     loss_fn_inputs = dict(request.loss_fn_inputs)
     target_tokens = loss_fn_inputs.get("target_tokens")
@@ -578,6 +586,36 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
         return client
 
+    def get_worker_record(worker_id: str) -> WorkerProcessRecord:
+        if worker_manager is None:
+            raise HTTPException(status_code=404, detail="Worker processes are not enabled")
+        records_by_id = {record.worker_id: record for record in worker_manager.snapshot()}
+        worker = records_by_id.get(worker_id)
+        if worker is None:
+            raise HTTPException(status_code=404, detail=f"Unknown worker_id: {worker_id}")
+        return worker
+
+    def attach_run_to_worker(record: RunRecord) -> None:
+        if worker_manager is None or record.worker_id is None:
+            return
+        worker_manager.attach_run(record.worker_id, _model_to_dict(record))
+
+    if worker_manager is not None:
+        with records_lock:
+            dirty_records = False
+            for run_id, client in runs.items():
+                record = records[run_id]
+                if record.worker_id is None:
+                    assigned_worker = worker_manager.assign(run_id)
+                    if assigned_worker is not None:
+                        record.worker_id = assigned_worker.worker_id
+                        record.adapter_id = client.adapter_id
+                        record.updated_at = _utc_now()
+                        dirty_records = True
+                attach_run_to_worker(record)
+            if dirty_records:
+                run_store.save(records)
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {
@@ -624,22 +662,26 @@ def create_app(
         if worker_manager is None:
             raise HTTPException(status_code=404, detail="Worker processes are not enabled")
         result = worker_manager.submit(worker_id, "ping", timeout_seconds=5.0)
-        records_by_id = {record.worker_id: record for record in worker_manager.snapshot()}
-        worker = records_by_id.get(worker_id)
-        if worker is None:
-            raise HTTPException(status_code=404, detail=f"Unknown worker_id: {worker_id}")
-        return WorkerCommandResponse(worker=worker, result=result)
+        return WorkerCommandResponse(worker=get_worker_record(worker_id), result=result)
 
     @app.post("/workers/{worker_id}/echo", response_model=WorkerCommandResponse)
     def echo_worker(worker_id: str, request: WorkerEchoRequest) -> WorkerCommandResponse:
         if worker_manager is None:
             raise HTTPException(status_code=404, detail="Worker processes are not enabled")
         result = worker_manager.submit(worker_id, "echo", payload=request.payload, timeout_seconds=5.0)
-        records_by_id = {record.worker_id: record for record in worker_manager.snapshot()}
-        worker = records_by_id.get(worker_id)
-        if worker is None:
-            raise HTTPException(status_code=404, detail=f"Unknown worker_id: {worker_id}")
-        return WorkerCommandResponse(worker=worker, result=result)
+        return WorkerCommandResponse(worker=get_worker_record(worker_id), result=result)
+
+    @app.get("/workers/{worker_id}/runs", response_model=WorkerRunsResponse)
+    def list_worker_runs(worker_id: str) -> WorkerRunsResponse:
+        if worker_manager is None:
+            raise HTTPException(status_code=404, detail="Worker processes are not enabled")
+        worker = get_worker_record(worker_id)
+        result = worker_manager.list_runs(worker_id)
+        return WorkerRunsResponse(
+            worker=worker,
+            runs=result.get("runs", []),
+            assigned_run_count=result.get("assigned_run_count", 0),
+        )
 
     def tenant_key(tenant_id: Optional[str]) -> str:
         return tenant_id or "_default"
@@ -991,6 +1033,7 @@ def create_app(
                 with records_lock:
                     records[run_id] = record
                     run_store.save(records)
+                attach_run_to_worker(record)
                 response = CreateRunResponse(
                     run_id=run_id,
                     adapter_id=client.adapter_id,

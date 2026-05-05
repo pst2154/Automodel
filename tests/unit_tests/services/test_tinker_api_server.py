@@ -132,6 +132,7 @@ def test_mixed_lora_server_reports_supervised_worker_processes(monkeypatch, tmp_
             f"/workers/{created['worker_id']}/echo",
             json={"payload": {"op": "future_create_run", "run_id": created["run_id"]}},
         ).json()
+        worker_runs = client.get(f"/workers/{created['worker_id']}/runs").json()
 
         assert health["worker_processes"] == 2
         assert len(health["workers"]) == 2
@@ -144,6 +145,10 @@ def test_mixed_lora_server_reports_supervised_worker_processes(monkeypatch, tmp_
         assert ping["result"]["worker_pid"] == ping["worker"]["pid"]
         assert echo["worker"]["worker_id"] == created["worker_id"]
         assert echo["result"]["payload"] == {"op": "future_create_run", "run_id": created["run_id"]}
+        assert worker_runs["worker"]["worker_id"] == created["worker_id"]
+        assert worker_runs["assigned_run_count"] == 1
+        assert worker_runs["runs"][0]["run_id"] == created["run_id"]
+        assert client.get("/workers/unknown/runs").status_code == 404
 
 
 def test_mixed_lora_server_restores_run_metadata(monkeypatch, tmp_path):
@@ -197,6 +202,31 @@ def test_mixed_lora_server_rehydrates_checkpointed_runs_on_startup(monkeypatch, 
     assert record["optimizer_steps"] == 7
     assert record["restored_from"] == "/tmp/checkpoint"
     assert sample["output"]["text"] == "hello adapter_restored"
+
+
+def test_mixed_lora_server_reattaches_restored_runs_to_workers(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    created = client.post(
+        "/runs",
+        json={"name": "restored", "adapter_id": "adapter_restored", "checkpoint_path": "/tmp/checkpoint"},
+    ).json()
+
+    restarted = server.create_app(
+        base_model="fake-model",
+        scratch_dir=tmp_path,
+        restore_runs_on_startup=True,
+        worker_processes=1,
+    )
+    with fastapi_testclient.TestClient(restarted) as restarted_client:
+        record = restarted_client.get(f"/runs/{created['run_id']}").json()
+        worker_runs = restarted_client.get(f"/workers/{record['worker_id']}/runs").json()
+
+        assert record["status"] == "ready"
+        assert worker_runs["assigned_run_count"] == 1
+        assert worker_runs["runs"][0]["run_id"] == created["run_id"]
+        assert worker_runs["runs"][0]["restored_from"] == "/tmp/checkpoint"
 
 
 def test_mixed_lora_server_can_use_json_metadata_backend(monkeypatch, tmp_path):

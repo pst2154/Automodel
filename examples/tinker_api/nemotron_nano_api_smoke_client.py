@@ -93,17 +93,33 @@ def sample(base_url: str, run_id: str, prompt: str, max_new_tokens: int) -> str:
     return response["output"]["text"]
 
 
+def poll_job(base_url: str, job_id: str, timeout_s: int) -> dict[str, Any]:
+    deadline = time.time() + timeout_s
+    job = get_json(base_url, f"/jobs/{job_id}")
+    while time.time() < deadline and job["status"] in {"queued", "running", "canceling"}:
+        time.sleep(2)
+        job = get_json(base_url, f"/jobs/{job_id}")
+    return job
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Exercise deployed Nemotron Nano mixed-LoRA HTTP API.")
     parser.add_argument("--base-url", default="http://127.0.0.1:18080")
     parser.add_argument("--base-model", default="/home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16")
     parser.add_argument("--cache-dir", default="/home/scratch.asteiner/hf")
+    parser.add_argument("--mode", choices=("train", "restore", "async-train"), default="train")
     parser.add_argument("--steps", type=int, default=1)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--max-tokens", type=int, default=64)
     parser.add_argument("--max-new-tokens", type=int, default=4)
     parser.add_argument("--wait-for-server", type=int, default=0)
+    parser.add_argument("--poll-timeout", type=int, default=900)
     parser.add_argument("--tenant-id", default="nemotron-smoke")
+    parser.add_argument("--atlas-run-id", default=None)
+    parser.add_argument("--borealis-run-id", default=None)
+    parser.add_argument("--atlas-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-atlas-smoke")
+    parser.add_argument("--borealis-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-borealis-smoke")
+    parser.add_argument("--save-prefix", default="nemotron-api")
     args = parser.parse_args()
 
     if args.wait_for_server > 0:
@@ -113,10 +129,48 @@ def main() -> None:
     health = get_json(args.base_url, "/health")
     print("health=" + json.dumps(health, sort_keys=True))
 
-    atlas = post_json(args.base_url, "/runs", {"name": "nemotron-atlas", "tenant_id": args.tenant_id})
-    borealis = post_json(args.base_url, "/runs", {"name": "nemotron-borealis", "tenant_id": args.tenant_id})
     atlas_prompt = "Tenant Atlas route alpha.\nAnswer:"
     borealis_prompt = "Tenant Borealis route alpha.\nAnswer:"
+
+    if args.mode == "restore":
+        if args.atlas_run_id is None:
+            atlas = post_json(
+                args.base_url,
+                "/runs",
+                {
+                    "name": "nemotron-atlas-restored",
+                    "tenant_id": args.tenant_id,
+                    "checkpoint_path": args.atlas_checkpoint,
+                },
+            )
+            atlas_run_id = atlas["run_id"]
+        else:
+            atlas_run_id = args.atlas_run_id
+        if args.borealis_run_id is None:
+            borealis = post_json(
+                args.base_url,
+                "/runs",
+                {
+                    "name": "nemotron-borealis-restored",
+                    "tenant_id": args.tenant_id,
+                    "checkpoint_path": args.borealis_checkpoint,
+                },
+            )
+            borealis_run_id = borealis["run_id"]
+        else:
+            borealis_run_id = args.borealis_run_id
+        atlas_text = sample(args.base_url, atlas_run_id, atlas_prompt, args.max_new_tokens)
+        borealis_text = sample(args.base_url, borealis_run_id, borealis_prompt, args.max_new_tokens)
+        print(f"atlas_run={atlas_run_id}")
+        print(f"borealis_run={borealis_run_id}")
+        print("atlas_restored_sample=" + atlas_text.replace("\n", "\\n"))
+        print("borealis_restored_sample=" + borealis_text.replace("\n", "\\n"))
+        print("atlas_state=" + json.dumps(get_json(args.base_url, f"/runs/{atlas_run_id}"), sort_keys=True))
+        print("borealis_state=" + json.dumps(get_json(args.base_url, f"/runs/{borealis_run_id}"), sort_keys=True))
+        return
+
+    atlas = post_json(args.base_url, "/runs", {"name": "nemotron-atlas", "tenant_id": args.tenant_id})
+    borealis = post_json(args.base_url, "/runs", {"name": "nemotron-borealis", "tenant_id": args.tenant_id})
     atlas_datum = build_datum(tokenizer, Example(atlas_prompt, " atlas-17."), args.max_tokens)
     borealis_datum = build_datum(tokenizer, Example(borealis_prompt, " borealis-05."), args.max_tokens)
 
@@ -124,33 +178,63 @@ def main() -> None:
     borealis_before = sample(args.base_url, borealis["run_id"], borealis_prompt, args.max_new_tokens)
     first_losses = None
     last_losses = None
-    for _ in range(args.steps):
-        mixed = post_json(
+    if args.mode == "async-train":
+        submitted = post_json(
             args.base_url,
-            "/mixed_forward_backward",
+            "/train_steps",
             {
                 "batches": {
                     atlas["run_id"]: [atlas_datum],
                     borealis["run_id"]: [borealis_datum],
-                }
+                },
+                "steps": args.steps,
+                "learning_rate": args.lr,
+                "save_names": {
+                    atlas["run_id"]: f"{args.save_prefix}-atlas-async-smoke",
+                    borealis["run_id"]: f"{args.save_prefix}-borealis-async-smoke",
+                },
+                "run_async": True,
+                "tenant_id": args.tenant_id,
             },
         )
-        post_json(args.base_url, f"/runs/{atlas['run_id']}/optim_step", {"learning_rate": args.lr})
-        post_json(args.base_url, f"/runs/{borealis['run_id']}/optim_step", {"learning_rate": args.lr})
-        losses = (mixed[atlas["run_id"]]["output"]["loss"], mixed[borealis["run_id"]]["output"]["loss"])
-        first_losses = first_losses or losses
-        last_losses = losses
+        job = poll_job(args.base_url, submitted["job"]["job_id"], args.poll_timeout)
+        first_losses = job.get("result", {}).get("first_losses")
+        last_losses = job.get("result", {}).get("last_losses")
+        atlas_save = {"output": {"path": job.get("result", {}).get("saved_paths", {}).get(atlas["run_id"])}}
+        borealis_save = {"output": {"path": job.get("result", {}).get("saved_paths", {}).get(borealis["run_id"])}}
+        print("job=" + json.dumps(job, sort_keys=True))
+    else:
+        for _ in range(args.steps):
+            mixed = post_json(
+                args.base_url,
+                "/mixed_forward_backward",
+                {
+                    "batches": {
+                        atlas["run_id"]: [atlas_datum],
+                        borealis["run_id"]: [borealis_datum],
+                    }
+                },
+            )
+            post_json(args.base_url, f"/runs/{atlas['run_id']}/optim_step", {"learning_rate": args.lr})
+            post_json(args.base_url, f"/runs/{borealis['run_id']}/optim_step", {"learning_rate": args.lr})
+            losses = (mixed[atlas["run_id"]]["output"]["loss"], mixed[borealis["run_id"]]["output"]["loss"])
+            first_losses = first_losses or losses
+            last_losses = losses
 
-    atlas_after = sample(args.base_url, atlas["run_id"], atlas_prompt, args.max_new_tokens)
-    borealis_after = sample(args.base_url, borealis["run_id"], borealis_prompt, args.max_new_tokens)
-    atlas_save = post_json(args.base_url, f"/runs/{atlas['run_id']}/save", {"name": "nemotron-api-atlas-smoke"})
-    borealis_save = post_json(
-        args.base_url,
-        f"/runs/{borealis['run_id']}/save",
-        {"name": "nemotron-api-borealis-smoke"},
-    )
+        atlas_save = post_json(
+            args.base_url,
+            f"/runs/{atlas['run_id']}/save",
+            {"name": f"{args.save_prefix}-atlas-smoke"},
+        )
+        borealis_save = post_json(
+            args.base_url,
+            f"/runs/{borealis['run_id']}/save",
+            {"name": f"{args.save_prefix}-borealis-smoke"},
+        )
     atlas_state = get_json(args.base_url, f"/runs/{atlas['run_id']}")
     borealis_state = get_json(args.base_url, f"/runs/{borealis['run_id']}")
+    atlas_after = sample(args.base_url, atlas["run_id"], atlas_prompt, args.max_new_tokens)
+    borealis_after = sample(args.base_url, borealis["run_id"], borealis_prompt, args.max_new_tokens)
 
     print(f"atlas_run={atlas['run_id']} adapter={atlas['adapter_id']}")
     print(f"borealis_run={borealis['run_id']} adapter={borealis['adapter_id']}")

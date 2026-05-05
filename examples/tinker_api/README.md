@@ -34,7 +34,8 @@ What works now:
   `dro`.
 - Backends: `loop`, `grouped`, `triton`, and `grouped_triton`.
 - Supervised worker processes with durable run placement and management RPC
-  (`/workers/{worker_id}/ping`, `/workers/{worker_id}/echo`).
+  (`/workers/{worker_id}/ping`, `/workers/{worker_id}/echo`,
+  `/workers/{worker_id}/runs`).
 - Opt-in live Tinker parity harness.
 - Nemotron Nano 30B A3B direct mixed-LoRA smoke.
 - Nemotron Nano 30B A3B HTTP mixed-LoRA train, inference, save, and restore
@@ -173,6 +174,7 @@ GET  /workers
 POST /workers/restart_dead
 POST /workers/{worker_id}/ping
 POST /workers/{worker_id}/echo
+GET  /workers/{worker_id}/runs
 ```
 
 Start a localhost-only Nemotron HTTP server on `4u8g-gen-0277` with:
@@ -216,6 +218,24 @@ docker run --rm --gpus all --network host \
     --max-tokens 64 \
     --max-new-tokens 4 \
     --wait-for-server 900
+```
+
+The same client now has repeatable modes for the remaining Nemotron checks:
+
+```bash
+# Create runs from saved checkpoints, then sample both restored adapters.
+python examples/tinker_api/nemotron_nano_api_smoke_client.py \
+  --base-url http://127.0.0.1:18080 \
+  --mode restore \
+  --max-new-tokens 4
+
+# Submit /train_steps with run_async=true, poll /jobs/{job_id}, save both
+# adapters, then sample the trained adapters.
+python examples/tinker_api/nemotron_nano_api_smoke_client.py \
+  --base-url http://127.0.0.1:18080 \
+  --mode async-train \
+  --steps 2 \
+  --max-new-tokens 4
 ```
 
 HTTP smoke result from `2026-05-04`:
@@ -271,6 +291,7 @@ tile.
 ## Validation Already Run
 
 - Full Tinker API unit suite in container: `31 passed`.
+- Focused server suite after worker-assignment RPC changes: `18 passed`.
 - Nemotron direct mixed-LoRA smoke: passed.
 - Nemotron HTTP mixed-LoRA train/inference/save smoke: passed.
 - Nemotron HTTP restart restore smoke: passed.
@@ -284,15 +305,15 @@ test results.
 
 ## Next Plan
 
-1. **Make restore/client testing repeatable.**
-   Add explicit restore-mode options to `nemotron_nano_api_smoke_client.py` so
-   it can sample existing restored run IDs or create runs directly from saved
-   checkpoints without hand-written `curl`.
+1. **Run the new repeatable Nemotron client modes.**
+   With the server already proven for train/save/restore, run
+   `--mode restore` and `--mode async-train` against the full Nemotron model and
+   record the outputs here.
 
 2. **Move model operations out of the API process.**
-   The worker manager exists, but model forward/backward/sample/save still run
-   in the FastAPI process. The next production step is a worker RPC that owns
-   the model, reports health, and can detach/restart/rehydrate assigned runs.
+   Worker assignment RPC now tracks attached runs. The next production step is
+   making a worker RPC own the model and implement create/forward_backward,
+   optim_step, save, and sample.
 
 3. **Add a short multi-step Nemotron job test.**
    Exercise `/train_steps` with `run_async=true`, poll `/jobs/{job_id}`, verify

@@ -34,6 +34,7 @@ def _default_start_method() -> str:
 
 def _rpc_worker(stop_event, command_queue, result_queue) -> None:
     """Serve simple worker-management RPC commands until shutdown."""
+    assigned_runs: dict[str, dict[str, Any]] = {}
     while not stop_event.is_set():
         try:
             request = command_queue.get(timeout=0.1)
@@ -50,6 +51,20 @@ def _rpc_worker(stop_event, command_queue, result_queue) -> None:
                 }
             elif command == "echo":
                 response = {"payload": payload}
+            elif command == "attach_run":
+                run = payload.get("run")
+                if not isinstance(run, dict) or not run.get("run_id"):
+                    raise ValueError("attach_run requires a run payload with run_id")
+                assigned_runs[run["run_id"]] = run
+                response = {"run_id": run["run_id"], "assigned_run_count": len(assigned_runs)}
+            elif command == "detach_run":
+                run_id = payload.get("run_id")
+                if not isinstance(run_id, str):
+                    raise ValueError("detach_run requires run_id")
+                assigned_runs.pop(run_id, None)
+                response = {"run_id": run_id, "assigned_run_count": len(assigned_runs)}
+            elif command == "list_runs":
+                response = {"runs": list(assigned_runs.values()), "assigned_run_count": len(assigned_runs)}
             elif command == "stop":
                 stop_event.set()
                 response = {"stopping": True}
@@ -74,6 +89,7 @@ class WorkerProcessRecord:
     pid: Optional[int]
     status: str
     restarts: int = 0
+    assigned_run_count: int = 0
     started_at: float = field(default_factory=time.time)
     stopped_at: Optional[float] = None
     last_exitcode: Optional[int] = None
@@ -196,9 +212,33 @@ class ProcessWorkerManager:
             raise_on_error=True,
         )
 
+    def attach_run(self, worker_id: str, run: dict[str, Any]) -> dict[str, Any]:
+        """Attach a run metadata snapshot to one worker process."""
+        result = self.submit(worker_id, "attach_run", payload={"run": run}, timeout_seconds=5.0)
+        self._update_assigned_count(worker_id, result)
+        return result
+
+    def detach_run(self, worker_id: str, run_id: str) -> dict[str, Any]:
+        """Detach a run from one worker process."""
+        result = self.submit(worker_id, "detach_run", payload={"run_id": run_id}, timeout_seconds=5.0)
+        self._update_assigned_count(worker_id, result)
+        return result
+
+    def list_runs(self, worker_id: str) -> dict[str, Any]:
+        """Return run metadata snapshots attached to one worker process."""
+        result = self.submit(worker_id, "list_runs", timeout_seconds=5.0)
+        self._update_assigned_count(worker_id, result)
+        return result
+
     def _restart_count(self, worker_id: str) -> int:
         slot = self._slots.get(worker_id)
         return 0 if slot is None else slot.record.restarts
+
+    def _update_assigned_count(self, worker_id: str, result: dict[str, Any]) -> None:
+        slot = self._slots.get(worker_id)
+        count = result.get("assigned_run_count")
+        if slot is not None and isinstance(count, int):
+            slot.record.assigned_run_count = count
 
     def _start_slot(self, worker_id: str, *, restarts: int) -> _WorkerSlot:
         stop_event = self._ctx.Event()
