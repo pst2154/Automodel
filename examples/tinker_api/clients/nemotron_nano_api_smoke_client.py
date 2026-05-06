@@ -179,8 +179,8 @@ def require_checkpoint_files(path: str | None, label: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Exercise deployed Nemotron Nano mixed-LoRA HTTP API.")
     parser.add_argument("--base-url", default="http://127.0.0.1:18080")
-    parser.add_argument("--base-model", default="/home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16")
-    parser.add_argument("--cache-dir", default="/home/scratch.asteiner/hf")
+    parser.add_argument("--base-model", default="/models/nemotron-nano-30b-a3b-bf16")
+    parser.add_argument("--cache-dir", default="/tmp/nemotron_tinker_hf")
     parser.add_argument(
         "--mode", choices=("train", "restore", "async-train", "submit-async", "await-job"), default="train"
     )
@@ -197,10 +197,8 @@ def main() -> None:
     parser.add_argument("--job-id", default=None)
     parser.add_argument("--atlas-run-id", default=None)
     parser.add_argument("--borealis-run-id", default=None)
-    parser.add_argument("--atlas-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-atlas-train")
-    parser.add_argument(
-        "--borealis-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-borealis-train"
-    )
+    parser.add_argument("--atlas-checkpoint", default="/tmp/nemotron_tinker_checkpoints/nemotron-api-atlas-train")
+    parser.add_argument("--borealis-checkpoint", default="/tmp/nemotron_tinker_checkpoints/nemotron-api-borealis-train")
     parser.add_argument("--save-prefix", default="nemotron-api")
     parser.add_argument("--detach-after", action="store_true")
     parser.add_argument("--verify-checkpoints", action="store_true")

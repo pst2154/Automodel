@@ -109,7 +109,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Exercise the mixed-LoRA HTTP API prototype.")
     parser.add_argument("--base-url", default="http://127.0.0.1:18080")
     parser.add_argument("--base-model", default="Qwen/Qwen3-0.6B")
-    parser.add_argument("--cache-dir", default="/home/scratch.asteiner/hf")
+    parser.add_argument("--cache-dir", default="/tmp/nemotron_tinker_hf")
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-3)

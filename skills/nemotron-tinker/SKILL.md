@@ -1,6 +1,6 @@
 ---
 name: nemotron-tinker
-description: Use for work on the Nemotron Tinker / Nemotron-Tinker prototype, including the Tinker-like FastAPI service, mixed-LoRA adapters, SFT recipes, RL LoRA, NeMo Gym bridge, NeMo-RL bridge, SDK usage, operator UI, standalone demo, and CompLab validation workflows.
+description: Use for work on the Nemotron Tinker / Nemotron-Tinker prototype, including the Tinker-like FastAPI service, mixed-LoRA adapters, SFT recipes, RL LoRA, NeMo Gym bridge, NeMo-RL bridge, SDK usage, operator UI, standalone demo, and GPU validation workflows.
 ---
 
 # Nemotron-Tinker
@@ -22,7 +22,7 @@ Nemotron Tinker prototype under `examples/tinker_api/` and
    - Python client code or recipes:
      `examples/tinker_api/docs/sdk.md`
 3. If the task involves a remote GPU host, scratch storage, Docker, or SSH
-   tunnels, also use the `complab` skill.
+   tunnels, use the local GPU-host runbook for that environment.
 
 ## Main Code Paths
 
@@ -94,7 +94,7 @@ git diff --check
 ## Workload Selection
 
 - Use `qwen_sft_quick` for fast local API and UI smoke tests.
-- Use `nemotron_sft_large` for full-model SFT validation on the CompLab GPU
+- Use `nemotron_sft_large` for full-model SFT validation on a GPU
   host.
 - Use `nemotron_rl_lora` or
   `examples/tinker_api/clients/rl_lora_workload_client.py` for resident RL

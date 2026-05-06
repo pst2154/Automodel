@@ -61,19 +61,19 @@ Use `--dry-run` to print the underlying command without submitting work.
 
 ## Start A Nemotron Server
 
-For the validated CompLab layout:
+For a generic container layout:
 
 ```bash
-cd /home/scratch.asteiner/Automodel-kernel-test
+cd /tmp/nemotron_tinker/Automodel-kernel-test
 docker run --rm --gpus all --ipc=host --network host \
-  -v /home/scratch.asteiner:/home/scratch.asteiner \
-  -v /home/scratch.asteiner/Automodel-kernel-test:/workspace \
+  -v /tmp/nemotron_tinker:/tmp/nemotron_tinker \
+  -v /tmp/nemotron_tinker/Automodel-kernel-test:/workspace \
   -w /workspace \
   nvcr.io/nvidia/nemo-automodel:26.04 \
   python examples/tinker_api/run_mixed_lora_server.py \
-    --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
-    --scratch-dir /home/scratch.asteiner \
-    --cache-dir /home/scratch.asteiner/hf \
+    --base-model /models/nemotron-nano-30b-a3b-bf16 \
+    --scratch-dir /tmp/nemotron_tinker \
+    --cache-dir /tmp/nemotron_tinker_hf \
     --rank 8 \
     --alpha 16 \
     --mixed-lora-backend grouped \

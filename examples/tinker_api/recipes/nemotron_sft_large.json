@@ -3,8 +3,8 @@
   "kind": "nemotron_sft",
   "args": {
     "base_url": "http://127.0.0.1:18081",
-    "base_model": "/home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
-    "cache_dir": "/home/scratch.asteiner/hf",
+    "base_model": "/models/nemotron-nano-30b-a3b-bf16",
+    "cache_dir": "/tmp/nemotron_tinker_hf",
     "mode": "async-train",
     "steps": 75,
     "batch_size": 1,

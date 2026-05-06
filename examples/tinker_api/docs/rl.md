@@ -46,8 +46,8 @@ Equivalent direct client:
 ```bash
 python examples/tinker_api/clients/rl_lora_workload_client.py \
   --base-url http://127.0.0.1:18082 \
-  --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
-  --cache-dir /home/scratch.asteiner/hf \
+  --base-model /models/nemotron-nano-30b-a3b-bf16 \
+  --cache-dir /tmp/nemotron_tinker_hf \
   --steps 12 \
   --learning-rate 2e-5 \
   --microbatch-size 4 \
@@ -102,8 +102,8 @@ Convert Gym rollout JSONL into a Tinker RL payload:
 python examples/tinker_api/tools/gym_rollouts_to_tinker_rl.py \
   --input-jsonl /path/to/gym_rollouts.jsonl \
   --output-json /tmp/tinker_rl_payload.json \
-  --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
-  --cache-dir /home/scratch.asteiner/hf \
+  --base-model /models/nemotron-nano-30b-a3b-bf16 \
+  --cache-dir /tmp/nemotron_tinker_hf \
   --run-id run_... \
   --loss-fn importance_sampling \
   --reward-baseline 0.5 \

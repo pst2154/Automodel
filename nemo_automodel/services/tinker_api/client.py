@@ -131,7 +131,7 @@ def _adapter_signature(lora_config: LoraConfig) -> tuple:
 class ServiceClient:
     """Entry point for creating Tinker-like AutoModel training clients."""
 
-    def __init__(self, scratch_dir: str | pathlib.Path = "/home/scratch.asteiner"):
+    def __init__(self, scratch_dir: str | pathlib.Path = "/tmp/nemotron_tinker"):
         self.scratch_dir = pathlib.Path(scratch_dir)
         self._workers: dict[tuple, SharedBaseModelWorker] = {}
         self._lock = threading.RLock()

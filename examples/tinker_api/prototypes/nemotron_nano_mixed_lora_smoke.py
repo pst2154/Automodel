@@ -46,10 +46,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Smoke-test mixed LoRA on local Nemotron Nano 30B A3B.")
     parser.add_argument(
         "--base-model",
-        default="/home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+        default="/models/nemotron-nano-30b-a3b-bf16",
     )
-    parser.add_argument("--scratch-dir", default="/home/scratch.asteiner")
-    parser.add_argument("--cache-dir", default="/home/scratch.asteiner/hf")
+    parser.add_argument("--scratch-dir", default="/tmp/nemotron_tinker")
+    parser.add_argument("--cache-dir", default="/tmp/nemotron_tinker_hf")
     parser.add_argument("--rank", type=int, default=8)
     parser.add_argument("--alpha", type=int, default=16)
     parser.add_argument("--lr", type=float, default=5e-5)

@@ -29,8 +29,8 @@ from nemo_automodel.services.tinker_api.server import create_app
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the mixed-LoRA Tinker API prototype server.")
     parser.add_argument("--base-model", default="Qwen/Qwen3-0.6B")
-    parser.add_argument("--scratch-dir", default="/home/scratch.asteiner")
-    parser.add_argument("--cache-dir", default="/home/scratch.asteiner/hf")
+    parser.add_argument("--scratch-dir", default="/tmp/nemotron_tinker")
+    parser.add_argument("--cache-dir", default="/tmp/nemotron_tinker_hf")
     parser.add_argument("--rank", type=int, default=16)
     parser.add_argument("--alpha", type=int, default=None)
     parser.add_argument("--device", default=None)

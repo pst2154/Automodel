@@ -413,7 +413,7 @@ class MixedLoraServiceClient:
         self,
         *,
         base_model: str,
-        scratch_dir: str | pathlib.Path = "/home/scratch.asteiner",
+        scratch_dir: str | pathlib.Path = "/tmp/nemotron_tinker",
         cache_dir: Optional[str] = None,
         device: Optional[str] = None,
         torch_dtype: str | torch.dtype = "bfloat16",

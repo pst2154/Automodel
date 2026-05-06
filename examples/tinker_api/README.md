@@ -103,5 +103,5 @@ examples/tinker_api/demos/async_lora_demo.html
 
 Future agent sessions should use the repo-local `nemotron-tinker` skill for
 work on this prototype. It points Codex at the right docs, recipes, validation
-commands, and CompLab conventions without loading this README as a giant
+commands, and GPU run conventions without loading this README as a giant
 runbook.

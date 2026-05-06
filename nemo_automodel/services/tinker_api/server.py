@@ -856,7 +856,7 @@ class ServiceMetrics:
 def create_app(
     *,
     base_model: str,
-    scratch_dir: str = "/home/scratch.asteiner",
+    scratch_dir: str = "/tmp/nemotron_tinker",
     cache_dir: Optional[str] = None,
     rank: int = 16,
     alpha: Optional[int] = None,

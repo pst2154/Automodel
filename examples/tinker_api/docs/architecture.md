@@ -102,15 +102,14 @@ $SCRATCH/tinker_api/rl_logs/
 $SCRATCH/checkpoints/
 ```
 
-For CompLab runs, use `/home/scratch.asteiner` as scratch and cache large model
-artifacts under `/home/scratch.asteiner/hf`.
+For GPU runs, use `/tmp/nemotron_tinker` as scratch and cache large model
+artifacts under `/tmp/nemotron_tinker_hf`.
 
 ## Distributed Scope
 
-The prototype is single-node. It can run large local models such as
-`NVIDIA-Nemotron-3-Nano-30B-A3B-BF16` when the model fits on the host, but it
-does not yet orchestrate multi-node rendezvous, rank placement, Slurm, Ray, or a
-distributed worker fleet.
+The prototype is single-node. It can run large local models when the model fits
+on the host, but it does not yet orchestrate multi-node rendezvous, rank
+placement, Slurm, Ray, or a distributed worker fleet.
 
 Expected production directions:
 

@@ -669,11 +669,11 @@ Answer:</textarea></label>
         </div>
         <div class="body">
           <div class="two">
-            <label>RL repo dir<input id="rl-repo" value="/Users/asteiner/Documents/Git_Repos/RL" /></label>
+            <label>RL repo dir<input id="rl-repo" value="" /></label>
             <label>Config path<input id="rl-config" value="examples/configs/grpo_math_1B.yaml" /></label>
           </div>
           <div class="two">
-            <label>Docker host RL repo dir<input id="rl-docker-repo" value="" placeholder="optional: /home/scratch.asteiner/RL" /></label>
+            <label>Docker host RL repo dir<input id="rl-docker-repo" value="" placeholder="optional: /tmp/nemotron_tinker/RL" /></label>
             <label>Docker container RL dir<input id="rl-docker-container-repo" value="/opt/nemo-rl" /></label>
           </div>
           <div class="two">
@@ -1022,7 +1022,7 @@ logger.wandb_enabled=false</textarea></label>
       async function refresh() {
         if (state.busy) return;
         state.health = await sdk.health();
-        if (state.health.rl_repo_dir && $("rl-repo").value === "/Users/asteiner/Documents/Git_Repos/RL") {
+        if (state.health.rl_repo_dir && $("rl-repo").value === "") {
           $("rl-repo").value = state.health.rl_repo_dir;
         }
         state.runs = await sdk.runs();
@@ -1133,8 +1133,8 @@ logger.wandb_enabled=false</textarea></label>
           "python examples/tinker_api/tools/gym_rollouts_to_tinker_rl.py \\",
           "  --input-jsonl /path/to/gym_rollouts.jsonl \\",
           "  --output-json /tmp/tinker_rl_payload.json \\",
-          "  --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \\",
-          "  --cache-dir /home/scratch.asteiner/hf \\",
+          "  --base-model /models/nemotron-nano-30b-a3b-bf16 \\",
+          "  --cache-dir /tmp/nemotron_tinker_hf \\",
           "  --run-id run_... \\",
           "  --loss-fn importance_sampling \\",
           "  --reward-baseline 0.5 \\",
