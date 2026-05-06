@@ -65,6 +65,7 @@ class FakeMixedLoraServiceClient:
         self.created = 0
         self.steps = {}
         self.tokenizer = FakeTokenizer()
+        self.forward_batches = []
 
     def create_lora_training_client(self, *, adapter_id=None, checkpoint_path=None):
         self.created += 1
@@ -74,12 +75,23 @@ class FakeMixedLoraServiceClient:
             self.steps[adapter_id] = 7
         return FakeTrainingClient(self, adapter_id, step=self.steps[adapter_id])
 
-    def forward_backward_mixed(self, batches_by_adapter, loss_fn, loss_fn_config=None):
+    def forward_backward_mixed(self, batches_by_adapter, loss_fn, loss_fn_config=None, zero_grad=True):
+        self.forward_batches.append(
+            {
+                "sizes": {adapter_id: len(batch) for adapter_id, batch in batches_by_adapter.items()},
+                "zero_grad": zero_grad,
+            }
+        )
         outputs = {}
         for adapter_id, batch in batches_by_adapter.items():
             outputs[adapter_id] = ForwardBackwardOutput(
                 loss=float(len(batch)),
-                metrics={"loss": float(len(batch)), "num_label_tokens": 3.0},
+                metrics={
+                    "loss": float(len(batch)),
+                    "loss:sum": float(len(batch)),
+                    "loss_weight_mean": 1.0,
+                    "num_label_tokens": float(len(batch) * 3),
+                },
                 loss_fn_outputs=[{"logprobs": [-1.0, -0.5]}],
             )
         return APIFuture(outputs)
@@ -928,6 +940,38 @@ def test_mixed_lora_server_runs_server_owned_train_steps(monkeypatch, tmp_path):
 
     jobs = client.get("/jobs").json()
     assert jobs[0]["kind"] == "train_steps"
+
+
+def test_mixed_lora_server_microbatches_train_steps(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    first = client.post("/runs", json={"name": "atlas"}).json()
+    service = app.state.tinker_service
+
+    response = client.post(
+        "/train_steps",
+        json={
+            "batches": {
+                first["run_id"]: [
+                    {"model_input": {"tokens": [idx, idx + 1]}, "loss_fn_inputs": {}} for idx in range(5)
+                ],
+            },
+            "steps": 1,
+            "learning_rate": 0.001,
+            "microbatch_size": 2,
+        },
+    ).json()
+
+    assert response["job"]["status"] == "succeeded"
+    assert response["job"]["result"]["last_losses"][first["run_id"]] == 5.0
+    assert response["runs"][first["run_id"]]["last_metrics"]["num_label_tokens"] == 15.0
+    assert response["runs"][first["run_id"]]["last_metrics"]["loss_weight_mean"] == 1.0
+    assert service.forward_batches == [
+        {"sizes": {"adapter_1": 2}, "zero_grad": True},
+        {"sizes": {"adapter_1": 2}, "zero_grad": False},
+        {"sizes": {"adapter_1": 1}, "zero_grad": False},
+    ]
 
 
 def test_mixed_lora_server_submits_async_train_job(monkeypatch, tmp_path):

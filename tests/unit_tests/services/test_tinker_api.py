@@ -137,6 +137,7 @@ def test_mixed_lora_layer_routes_ranges_with_torch_fallback():
     out = layer(torch.tensor([[2.0, 3.0, 5.0], [7.0, 11.0, 13.0]]))
 
     assert not layer._can_use_triton_lora(torch.zeros(1, 3))
+    assert base.weight.requires_grad is False
     assert torch.allclose(out, torch.tensor([[12.0, 3.0], [7.0, 59.0]]))
 
 

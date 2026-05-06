@@ -169,6 +169,7 @@ class TrainStepsRequest(BaseModel):
     steps: int
     learning_rate: float
     batch_size: int = 1
+    microbatch_size: Optional[int] = None
     loss_fn: str = "cross_entropy"
     loss_fn_config: dict[str, float] = Field(default_factory=dict)
     weight_decay: float = 0.0
@@ -1053,6 +1054,7 @@ def create_app(
                 run_store.save(records)
 
     app.state.executor = executor
+    app.state.tinker_service = service
     app.state.service_metrics = service_metrics
     app.state.worker_manager = worker_manager
     app.state.reattach_runs_to_workers = reattach_runs_to_workers
@@ -1549,6 +1551,8 @@ def create_app(
             raise ValueError("steps must be non-negative")
         if request.batch_size <= 0:
             raise ValueError("batch_size must be positive")
+        if request.microbatch_size is not None and request.microbatch_size <= 0:
+            raise ValueError("microbatch_size must be positive when provided")
         if get_job_record(job.job_id).status == "canceled":
             return TrainStepsResponse(job=job, runs={}, outputs={})
 
@@ -1563,6 +1567,56 @@ def create_app(
             betas=request.betas,
             eps=request.eps,
         )
+
+        def merge_microbatch_outputs(accumulator: dict[str, Any], micro_outputs: dict[str, Any]) -> dict[str, Any]:
+            for run_id, client in clients_by_run.items():
+                output = micro_outputs.get(client.adapter_id)
+                if output is None:
+                    continue
+                current = accumulator.setdefault(
+                    run_id,
+                    {
+                        "loss": 0.0,
+                        "metrics": {
+                            "loss": 0.0,
+                            "loss:sum": 0.0,
+                            "loss:mean": 0.0,
+                            "num_label_tokens": 0.0,
+                            "loss_fn": request.loss_fn,
+                        },
+                        "weighted_metric_sums": {},
+                        "loss_fn_outputs": [],
+                    },
+                )
+                metrics = dict(output.metrics)
+                loss_sum = float(metrics.get("loss:sum", output.loss))
+                num_label_tokens = float(metrics.get("num_label_tokens", 0.0))
+                current["loss"] += loss_sum
+                current["metrics"]["loss"] += loss_sum
+                current["metrics"]["loss:sum"] += loss_sum
+                current["metrics"]["num_label_tokens"] += num_label_tokens
+                current["loss_fn_outputs"].extend(output.loss_fn_outputs)
+                for key, value in metrics.items():
+                    if key in {"loss", "loss:sum", "loss:mean", "num_label_tokens", "loss_fn"}:
+                        continue
+                    if isinstance(value, (int, float)):
+                        if key == "loss_weight_mean" or key.endswith("_mean") or key.endswith(":mean"):
+                            current["weighted_metric_sums"][key] = current["weighted_metric_sums"].get(key, 0.0) + (
+                                float(value) * num_label_tokens
+                            )
+                        else:
+                            current["metrics"][key] = current["metrics"].get(key, 0.0) + float(value)
+                    else:
+                        current["metrics"][key] = value
+            return accumulator
+
+        def finalize_microbatch_outputs(accumulator: dict[str, Any]) -> dict[str, Any]:
+            for current in accumulator.values():
+                denom = max(float(current["metrics"]["num_label_tokens"]), 1.0)
+                current["metrics"]["loss:mean"] = float(current["metrics"]["loss:sum"]) / denom
+                for key, weighted_sum in current.pop("weighted_metric_sums", {}).items():
+                    current["metrics"][key] = float(weighted_sum) / denom
+            return accumulator
 
         outputs: dict[str, Any] = {}
         existing_progress = dict(get_job_record(job.job_id).progress)
@@ -1589,25 +1643,45 @@ def create_app(
                 adapter_batches = {clients_by_run[run_id].adapter_id: batch for run_id, batch in batches_by_run.items()}
                 for run_id in run_ids:
                     mark_run(run_id, status="running")
-                mixed_outputs = service.forward_backward_mixed(
-                    adapter_batches,
-                    request.loss_fn,
-                    request.loss_fn_config,
-                ).result()
+                microbatch_size = request.microbatch_size or max(len(batch) for batch in adapter_batches.values())
+                microbatch_count = max(
+                    (len(batch) + microbatch_size - 1) // microbatch_size for batch in adapter_batches.values()
+                )
+                mixed_outputs = {}
+                for microbatch_idx in range(microbatch_count):
+                    micro_batches = {
+                        adapter_id: batch[microbatch_idx * microbatch_size : (microbatch_idx + 1) * microbatch_size]
+                        for adapter_id, batch in adapter_batches.items()
+                    }
+                    micro_batches = {adapter_id: batch for adapter_id, batch in micro_batches.items() if batch}
+                    micro_outputs = service.forward_backward_mixed(
+                        micro_batches,
+                        request.loss_fn,
+                        request.loss_fn_config,
+                        zero_grad=microbatch_idx == 0,
+                    ).result()
+                    mixed_outputs = merge_microbatch_outputs(mixed_outputs, micro_outputs)
+                mixed_outputs = finalize_microbatch_outputs(mixed_outputs)
                 record_worker_operation(
                     "train_steps.forward_backward",
                     run_ids,
-                    {"job_id": job.job_id, "step": step + 1, "loss_fn": request.loss_fn},
+                    {
+                        "job_id": job.job_id,
+                        "step": step + 1,
+                        "loss_fn": request.loss_fn,
+                        "microbatch_size": microbatch_size,
+                        "microbatch_count": microbatch_count,
+                    },
                 )
                 losses = {}
-                for run_id, client in clients_by_run.items():
-                    output = mixed_outputs[client.adapter_id]
+                for run_id in run_ids:
+                    output = mixed_outputs[run_id]
                     record = mark_run(run_id, status="ready")
                     record.forward_backward_calls += 1
-                    record.last_loss = output.loss
-                    record.last_metrics = dict(output.metrics)
-                    losses[run_id] = output.loss
-                    outputs[run_id] = asdict(output)
+                    record.last_loss = output["loss"]
+                    record.last_metrics = dict(output["metrics"])
+                    losses[run_id] = output["loss"]
+                    outputs[run_id] = output
                 first_losses = first_losses or losses
                 last_losses = losses
                 for run_id, client in clients_by_run.items():

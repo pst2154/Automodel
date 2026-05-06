@@ -82,6 +82,53 @@ def build_datum(tokenizer, example: Example, max_tokens: int) -> dict[str, Any]:
     }
 
 
+def tenant_examples(tenant: str, route_prefix: str, color: str, count: int) -> list[Example]:
+    """Return deterministic synthetic SFT facts for one tenant adapter."""
+    keys = [
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+        "epsilon",
+        "zeta",
+        "eta",
+        "theta",
+        "iota",
+        "kappa",
+        "lambda",
+        "mu",
+        "nu",
+        "xi",
+        "omicron",
+        "pi",
+        "rho",
+        "sigma",
+        "tau",
+        "upsilon",
+        "phi",
+        "chi",
+        "psi",
+        "omega",
+    ]
+    examples = []
+    for idx in range(count):
+        key = keys[idx % len(keys)]
+        shard = idx // len(keys)
+        route = f"{route_prefix}-{idx * 7 + 17:03d}"
+        if idx % 3 == 0:
+            examples.append(Example(f"Tenant {tenant} route {key} shard {shard}.\nAnswer:", f" {route}."))
+        elif idx % 3 == 1:
+            examples.append(Example(f"Tenant {tenant} color {key} shard {shard}.\nAnswer:", f" {color}."))
+        else:
+            examples.append(
+                Example(
+                    f"Tenant {tenant} policy {key} shard {shard}.\nAnswer:",
+                    f" use {route} with {color} priority.",
+                )
+            )
+    return examples
+
+
 def sample(base_url: str, run_id: str, prompt: str, max_new_tokens: int) -> str:
     response = post_json(
         base_url,
@@ -119,6 +166,16 @@ def detach_run(base_url: str, run_id: str) -> dict[str, Any]:
     return post_json(base_url, f"/runs/{run_id}/detach", {})
 
 
+def require_checkpoint_files(path: str | None, label: str) -> None:
+    if path is None:
+        raise RuntimeError(f"{label} checkpoint path is missing")
+    checkpoint_dir = pathlib.Path(path)
+    expected = ["adapter_config.json", "adapter_model.pt", "optimizer.pt"]
+    missing = [name for name in expected if not (checkpoint_dir / name).is_file()]
+    if missing:
+        raise RuntimeError(f"{label} checkpoint is missing files {missing}: {path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Exercise deployed Nemotron Nano mixed-LoRA HTTP API.")
     parser.add_argument("--base-url", default="http://127.0.0.1:18080")
@@ -127,19 +184,23 @@ def main() -> None:
     parser.add_argument("--mode", choices=("train", "restore", "async-train"), default="train")
     parser.add_argument("--steps", type=int, default=1)
     parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--microbatch-size", type=int, default=None)
+    parser.add_argument("--examples-per-adapter", type=int, default=16)
     parser.add_argument("--max-tokens", type=int, default=64)
     parser.add_argument("--max-new-tokens", type=int, default=4)
     parser.add_argument("--wait-for-server", type=int, default=0)
     parser.add_argument("--poll-timeout", type=int, default=900)
-    parser.add_argument("--tenant-id", default="nemotron-smoke")
+    parser.add_argument("--tenant-id", default="nemotron-workload")
     parser.add_argument("--atlas-run-id", default=None)
     parser.add_argument("--borealis-run-id", default=None)
-    parser.add_argument("--atlas-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-atlas-smoke")
+    parser.add_argument("--atlas-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-atlas-train")
     parser.add_argument(
-        "--borealis-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-borealis-smoke"
+        "--borealis-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-borealis-train"
     )
     parser.add_argument("--save-prefix", default="nemotron-api")
     parser.add_argument("--detach-after", action="store_true")
+    parser.add_argument("--verify-checkpoints", action="store_true")
     args = parser.parse_args()
 
     if args.wait_for_server > 0:
@@ -198,8 +259,10 @@ def main() -> None:
 
     atlas = post_json(args.base_url, "/runs", {"name": "nemotron-atlas", "tenant_id": args.tenant_id})
     borealis = post_json(args.base_url, "/runs", {"name": "nemotron-borealis", "tenant_id": args.tenant_id})
-    atlas_datum = build_datum(tokenizer, Example(atlas_prompt, " atlas-17."), args.max_tokens)
-    borealis_datum = build_datum(tokenizer, Example(borealis_prompt, " borealis-05."), args.max_tokens)
+    atlas_examples = tenant_examples("Atlas", "atlas", "emerald", args.examples_per_adapter)
+    borealis_examples = tenant_examples("Borealis", "borealis", "silver", args.examples_per_adapter)
+    atlas_data = [build_datum(tokenizer, example, args.max_tokens) for example in atlas_examples]
+    borealis_data = [build_datum(tokenizer, example, args.max_tokens) for example in borealis_examples]
 
     atlas_before = sample(args.base_url, atlas["run_id"], atlas_prompt, args.max_new_tokens)
     borealis_before = sample(args.base_url, borealis["run_id"], borealis_prompt, args.max_new_tokens)
@@ -211,14 +274,16 @@ def main() -> None:
             "/train_steps",
             {
                 "batches": {
-                    atlas["run_id"]: [atlas_datum],
-                    borealis["run_id"]: [borealis_datum],
+                    atlas["run_id"]: atlas_data,
+                    borealis["run_id"]: borealis_data,
                 },
                 "steps": args.steps,
                 "learning_rate": args.lr,
+                "batch_size": args.batch_size,
+                "microbatch_size": args.microbatch_size,
                 "save_names": {
-                    atlas["run_id"]: f"{args.save_prefix}-atlas-async-smoke",
-                    borealis["run_id"]: f"{args.save_prefix}-borealis-async-smoke",
+                    atlas["run_id"]: f"{args.save_prefix}-atlas-async-train",
+                    borealis["run_id"]: f"{args.save_prefix}-borealis-async-train",
                 },
                 "run_async": True,
                 "tenant_id": args.tenant_id,
@@ -239,8 +304,8 @@ def main() -> None:
                 "/mixed_forward_backward",
                 {
                     "batches": {
-                        atlas["run_id"]: [atlas_datum],
-                        borealis["run_id"]: [borealis_datum],
+                        atlas["run_id"]: atlas_data * args.batch_size,
+                        borealis["run_id"]: borealis_data * args.batch_size,
                     }
                 },
             )
@@ -253,12 +318,12 @@ def main() -> None:
         atlas_save = post_json(
             args.base_url,
             f"/runs/{atlas['run_id']}/save",
-            {"name": f"{args.save_prefix}-atlas-smoke"},
+            {"name": f"{args.save_prefix}-atlas-train"},
         )
         borealis_save = post_json(
             args.base_url,
             f"/runs/{borealis['run_id']}/save",
-            {"name": f"{args.save_prefix}-borealis-smoke"},
+            {"name": f"{args.save_prefix}-borealis-train"},
         )
     atlas_state = get_json(args.base_url, f"/runs/{atlas['run_id']}")
     borealis_state = get_json(args.base_url, f"/runs/{borealis['run_id']}")
@@ -279,6 +344,10 @@ def main() -> None:
     print("borealis_state=" + json.dumps(borealis_state, sort_keys=True))
     print(f"atlas_saved={atlas_save['output']['path']}")
     print(f"borealis_saved={borealis_save['output']['path']}")
+    if args.verify_checkpoints:
+        require_checkpoint_files(atlas_save["output"]["path"], "atlas")
+        require_checkpoint_files(borealis_save["output"]["path"], "borealis")
+        print("checkpoint_files_verified=true")
     if args.detach_after:
         print("atlas_detach=" + json.dumps(detach_run(args.base_url, atlas["run_id"]), sort_keys=True))
         print("borealis_detach=" + json.dumps(detach_run(args.base_url, borealis["run_id"]), sort_keys=True))

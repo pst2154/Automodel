@@ -17,7 +17,7 @@
 This branch is an experimental Tinker-style training service for multiple LoRA
 adapters over one resident base model. The main path is the mixed-LoRA HTTP
 service and `MixedLoraServiceClient`; older `ServiceClient` examples are legacy
-smoke tests and should not drive new work.
+sanity checks and should not drive new work.
 
 ## Current Status
 
@@ -55,9 +55,12 @@ What works now:
 - Lightweight service metrics are exposed through `/metrics` and embedded in
   `/health`, including operation counts, failures, and durations.
 - Opt-in live Tinker parity harness.
-- Nemotron Nano 30B A3B direct mixed-LoRA smoke.
-- Nemotron Nano 30B A3B HTTP mixed-LoRA train, inference, save, and restore
-  smoke.
+- Nemotron Nano 30B A3B direct mixed-LoRA validation.
+- Nemotron Nano 30B A3B HTTP mixed-LoRA async train, inference, save, and
+  restore validation.
+- Full Nemotron Nano 30B A3B large-workload API validation with two LoRA
+  adapters, 64 SFT examples per adapter, server-owned microbatching, 50 logical
+  training steps, checkpoint verification, and post-train sampling.
 
 What is not V1-ready:
 
@@ -72,9 +75,10 @@ Ignore for tomorrow:
 
 - The legacy `ServiceClient` adapter-swapping path in `client.py`.
 - Old tiny random examples unless a quick sanity check is needed. The Qwen HTTP
-  smoke remains useful because it is fast and now trains multiple SFT examples
+  client remains useful because it is fast and now trains multiple SFT examples
   per adapter.
-- `grouped_triton` performance tuning until the live HTTP Nemotron test works.
+- `grouped_triton` performance tuning until the HTTP path is stable under
+  larger full-model workloads.
 - Megatron Bridge integration until the AutoModel HTTP path hits a hard wall.
 
 ## Important Files
@@ -91,11 +95,11 @@ Ignore for tomorrow:
   UI with LoRA task controls and a NeMo-RL bridge panel.
 - `examples/tinker_api/run_mixed_lora_server.py`: HTTP server entry point.
 - `examples/tinker_api/api_smoke_client.py`: Qwen-oriented HTTP API client
-  smoke with multiple masked next-token SFT examples per adapter.
+  with multiple masked next-token SFT examples per adapter.
 - `examples/tinker_api/nemotron_nano_api_smoke_client.py`: deployed HTTP
-  Nemotron Nano train/inference smoke.
+  Nemotron Nano train/inference workload client.
 - `examples/tinker_api/nemotron_nano_mixed_lora_smoke.py`: direct Python
-  Nemotron Nano mixed-LoRA smoke.
+  Nemotron Nano mixed-LoRA validation.
 - `examples/tinker_api/benchmark_mixed_lora_backends.py`: backend benchmark.
 - `examples/llm_finetune/qwen/qwen3_moe_2layer_proxy_ep_smoke.yaml`:
   two-GPU Qwen3-MoE expert-parallel full-model smoke.
@@ -389,7 +393,7 @@ docker run --rm --gpus all --ipc=host --network host \
     --port 18080
 ```
 
-Run the deployed HTTP client from the same host:
+Run the deployed HTTP workload client from the same host:
 
 ```bash
 docker run --rm --gpus all --network host \
@@ -445,6 +449,53 @@ borealis_saved=/home/scratch.asteiner/checkpoints/nemotron-api-borealis-smoke
 
 Saved HTTP adapter directories were verified. Each contains
 `adapter_config.json`, `adapter_model.pt`, and `optimizer.pt`.
+
+Full large-workload API result from `2026-05-06`:
+
+```bash
+docker exec nvidia-tinker-nemotron-ms \
+  python examples/tinker_api/nemotron_nano_api_smoke_client.py \
+    --base-url http://127.0.0.1:18081 \
+    --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
+    --cache-dir /home/scratch.asteiner/hf \
+    --mode async-train \
+    --steps 50 \
+    --batch-size 1 \
+    --microbatch-size 4 \
+    --examples-per-adapter 64 \
+    --lr 5e-5 \
+    --max-tokens 96 \
+    --max-new-tokens 16 \
+    --poll-timeout 7200 \
+    --tenant-id nemotron-large-workload-v2 \
+    --save-prefix nemotron-large-workload-v2 \
+    --verify-checkpoints
+```
+
+Result:
+
+```text
+job_id=job_7dab2f1aabb7
+atlas_run=run_6099467a0ea4 adapter=adapter_2dffc8a46718
+borealis_run=run_1a42850ccffe adapter=adapter_b45846330355
+steps=50
+examples_per_adapter=64
+microbatch_size=4
+atlas_loss=2298.2343 -> 1066.7507
+borealis_loss=2186.4991 -> 904.7063
+atlas_loss_mean=2.5041
+borealis_loss_mean=2.1188
+loss_weight_mean=1.0
+atlas_after=Tenant Atlas route alpha.\nAnswer: atlas-01.neon.tech...
+borealis_after=Tenant Borealis route alpha.\nAnswer: borealis-7...
+checkpoint_files_verified=true
+```
+
+The first large attempt OOMed because `/train_steps` forwarded the whole batch
+at once. After adding server-owned microbatch accumulation it still OOMed until
+two real issues were fixed: cross-entropy no longer materializes full-vocab
+log-prob tensors, and the frozen base model now has `requires_grad=False` so
+only LoRA parameters allocate gradients.
 
 Restart restore also passed after widening `RunRecord.last_metrics` to
 `dict[str, Any]`. Start the server with the same command plus
@@ -509,15 +560,17 @@ tile.
   `42 passed`.
 - Focused server suite after NeMo-RL bridge endpoints and UI controls:
   `30 passed` with `uv run python -m pytest tests/unit_tests/services/test_tinker_api_server.py -q`.
-- Nemotron direct mixed-LoRA smoke: passed.
-- Nemotron HTTP mixed-LoRA train/inference/save smoke: passed.
-- Nemotron HTTP restart restore smoke: passed.
-- Backend benchmark smoke: passed.
+- Full Nemotron HTTP large-workload async train/inference/save validation:
+  passed.
+- Nemotron direct mixed-LoRA validation: passed.
+- Nemotron HTTP mixed-LoRA train/inference/save validation: passed.
+- Nemotron HTTP restart restore validation: passed.
+- Backend benchmark validation: passed.
 - Worker IPC ping/echo tests: passed.
 - Local `ruff` and `py_compile`: passed.
 - Focused SFT tokenization regressions: `2 passed`.
 - Broader local Tinker service suite after explicit CUDA skips:
-  `52 passed, 3 skipped`.
+  `53 passed, 3 skipped`.
 
 Local laptop pytest is not reliable because the local environment has a
 `tokenizers`/`transformers` version mismatch. Use the container for meaningful
@@ -525,32 +578,23 @@ test results.
 
 ## Next Plan
 
-1. **Repeat the multi-sample SFT API test on full Nemotron.**
-   Use the fixed next-token datum builders from the Qwen HTTP smoke, but point
-   the deployed server and client at
-   `/home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16`.
-
-2. **Run the repeatable Nemotron client modes.**
-   With train/save/restore already proven once, run `--mode restore` and
-   `--mode async-train` against the full Nemotron model and record the outputs
-   here.
-
-3. **Move model operations out of the API process.**
+1. **Move model operations out of the API process.**
    Worker assignment RPC now tracks attached runs and records operation
    envelopes, and restarted workers are reattached to resident runs. The next
    production step is replacing operation recording with actual worker
    execution for create/forward_backward, optim_step, save, and sample.
 
-4. **Add a short multi-step Nemotron job test.**
-   Exercise `/train_steps` with `run_async=true`, poll `/jobs/{job_id}`, verify
-   continuation after restart, and save both adapters at completion.
+2. **Run restart continuation on the large-workload path.**
+   Start a long `/train_steps` job, interrupt the API process, restart with
+   `--resume-interrupted-jobs-on-startup`, and confirm it resumes from
+   persisted job progress instead of starting over.
 
-5. **Improve inference performance without compiling.**
+3. **Improve inference performance without compiling.**
    Keep the manual sampling fallback, but prefer `generate()` when a model
    supports it. For Nemotron, investigate whether passing explicit
    `cache_position` is enough to re-enable cached generation safely.
 
-6. **Decide the production scale track.**
+4. **Decide the production scale track.**
    AutoModel is now viable for a single-node API/control-plane prototype. For
    large-cluster base-model sharding and production throughput, compare worker
    RPC against the Megatron Bridge/Nemotron-native training path before doing

@@ -452,6 +452,8 @@ class MixedLoraServiceClient:
             attn_implementation=attn_implementation,
         )
         self.model.to(self.device)
+        for parameter in self.model.parameters():
+            parameter.requires_grad_(False)
         self.model.train()
         self.mixed_lora_layers = self._patch_target_linears()
 
@@ -575,6 +577,7 @@ class MixedLoraServiceClient:
         batches_by_adapter: dict[str, list[Datum]],
         loss_fn: str = "cross_entropy",
         loss_fn_config: Optional[dict[str, float]] = None,
+        zero_grad: bool = True,
     ) -> APIFuture[dict[str, ForwardBackwardOutput]]:
         """Run one mixed-adapter forward/backward pass over a concatenated batch."""
         if loss_fn not in SUPPORTED_LOSS_FNS:
@@ -602,7 +605,8 @@ class MixedLoraServiceClient:
         input_ids, labels = _build_batch(data, self.tokenizer.pad_token_id, self.device)
         attention_mask = input_ids.ne(self.tokenizer.pad_token_id).to(torch.long)
 
-        self.model.zero_grad(set_to_none=True)
+        if zero_grad:
+            self.model.zero_grad(set_to_none=True)
         self._set_active_ranges(ranges)
         self.model.train()
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
@@ -619,17 +623,21 @@ class MixedLoraServiceClient:
 
         total_loss = torch.zeros((), dtype=torch.float32, device=self.device)
         outputs_by_adapter = {}
-        with torch.no_grad():
-            target_logprobs = F.log_softmax(shift_logits, dim=-1)
-            safe_labels = shift_labels.clamp_min(0).unsqueeze(-1)
-            gathered = target_logprobs.gather(-1, safe_labels).squeeze(-1)
-            gathered = gathered.masked_fill(~token_mask, 0.0)
+        gathered = None
+        if loss_fn != "cross_entropy":
+            with torch.no_grad():
+                target_logprobs = F.log_softmax(shift_logits, dim=-1)
+                safe_labels = shift_labels.clamp_min(0).unsqueeze(-1)
+                gathered = target_logprobs.gather(-1, safe_labels).squeeze(-1)
+                gathered = gathered.masked_fill(~token_mask, 0.0)
 
         for adapter_id, start, end in ranges:
             adapter_loss, adapter_mask, loss_metrics = _rl_token_loss(
                 loss_fn=loss_fn,
                 per_token_loss=per_token_ce[start:end],
-                gathered_logprobs=gathered[start:end],
+                gathered_logprobs=(
+                    gathered[start:end] if gathered is not None else torch.empty_like(per_token_ce[start:end])
+                ),
                 data=data[start:end],
                 token_mask=token_mask[start:end],
                 device=self.device,
@@ -650,7 +658,11 @@ class MixedLoraServiceClient:
             outputs_by_adapter[adapter_id] = ForwardBackwardOutput(
                 loss=float(loss_sum.detach().cpu()),
                 metrics=metrics,
-                loss_fn_outputs=[{"logprobs": row.detach().cpu().tolist()} for row in gathered[start:end]],
+                loss_fn_outputs=(
+                    [{"logprobs": row.detach().cpu().tolist()} for row in gathered[start:end]]
+                    if gathered is not None
+                    else []
+                ),
             )
 
         total_loss.backward()
