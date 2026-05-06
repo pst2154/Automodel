@@ -181,7 +181,9 @@ def main() -> None:
     parser.add_argument("--base-url", default="http://127.0.0.1:18080")
     parser.add_argument("--base-model", default="/home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16")
     parser.add_argument("--cache-dir", default="/home/scratch.asteiner/hf")
-    parser.add_argument("--mode", choices=("train", "restore", "async-train"), default="train")
+    parser.add_argument(
+        "--mode", choices=("train", "restore", "async-train", "submit-async", "await-job"), default="train"
+    )
     parser.add_argument("--steps", type=int, default=1)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--batch-size", type=int, default=1)
@@ -192,6 +194,7 @@ def main() -> None:
     parser.add_argument("--wait-for-server", type=int, default=0)
     parser.add_argument("--poll-timeout", type=int, default=900)
     parser.add_argument("--tenant-id", default="nemotron-workload")
+    parser.add_argument("--job-id", default=None)
     parser.add_argument("--atlas-run-id", default=None)
     parser.add_argument("--borealis-run-id", default=None)
     parser.add_argument("--atlas-checkpoint", default="/home/scratch.asteiner/checkpoints/nemotron-api-atlas-train")
@@ -257,6 +260,34 @@ def main() -> None:
             print("borealis_detach=" + json.dumps(detach_run(args.base_url, borealis_run_id), sort_keys=True))
         return
 
+    if args.mode == "await-job":
+        if args.job_id is None or args.atlas_run_id is None or args.borealis_run_id is None:
+            raise ValueError("--mode await-job requires --job-id, --atlas-run-id, and --borealis-run-id")
+        job = poll_job(args.base_url, args.job_id, args.poll_timeout)
+        saved_paths = job.get("result", {}).get("saved_paths", {})
+        atlas_save = {"output": {"path": saved_paths.get(args.atlas_run_id)}}
+        borealis_save = {"output": {"path": saved_paths.get(args.borealis_run_id)}}
+        if atlas_save["output"]["path"] is None or borealis_save["output"]["path"] is None:
+            raise RuntimeError(f"Job did not save both adapters: {json.dumps(job, sort_keys=True)}")
+        atlas_state = get_json(args.base_url, f"/runs/{args.atlas_run_id}")
+        borealis_state = get_json(args.base_url, f"/runs/{args.borealis_run_id}")
+        require_ready_run(atlas_state, "atlas")
+        require_ready_run(borealis_state, "borealis")
+        atlas_after = sample(args.base_url, args.atlas_run_id, atlas_prompt, args.max_new_tokens)
+        borealis_after = sample(args.base_url, args.borealis_run_id, borealis_prompt, args.max_new_tokens)
+        print("job=" + json.dumps(job, sort_keys=True))
+        print("atlas_after=" + atlas_after.replace("\n", "\\n"))
+        print("borealis_after=" + borealis_after.replace("\n", "\\n"))
+        print("atlas_state=" + json.dumps(atlas_state, sort_keys=True))
+        print("borealis_state=" + json.dumps(borealis_state, sort_keys=True))
+        print(f"atlas_saved={atlas_save['output']['path']}")
+        print(f"borealis_saved={borealis_save['output']['path']}")
+        if args.verify_checkpoints:
+            require_checkpoint_files(atlas_save["output"]["path"], "atlas")
+            require_checkpoint_files(borealis_save["output"]["path"], "borealis")
+            print("checkpoint_files_verified=true")
+        return
+
     atlas = post_json(args.base_url, "/runs", {"name": "nemotron-atlas", "tenant_id": args.tenant_id})
     borealis = post_json(args.base_url, "/runs", {"name": "nemotron-borealis", "tenant_id": args.tenant_id})
     atlas_examples = tenant_examples("Atlas", "atlas", "emerald", args.examples_per_adapter)
@@ -268,7 +299,7 @@ def main() -> None:
     borealis_before = sample(args.base_url, borealis["run_id"], borealis_prompt, args.max_new_tokens)
     first_losses = None
     last_losses = None
-    if args.mode == "async-train":
+    if args.mode in {"async-train", "submit-async"}:
         submitted = post_json(
             args.base_url,
             "/train_steps",
@@ -289,6 +320,14 @@ def main() -> None:
                 "tenant_id": args.tenant_id,
             },
         )
+        if args.mode == "submit-async":
+            print("submitted=" + json.dumps(submitted, sort_keys=True))
+            print(f"job_id={submitted['job']['job_id']}")
+            print(f"atlas_run={atlas['run_id']} adapter={atlas['adapter_id']}")
+            print(f"borealis_run={borealis['run_id']} adapter={borealis['adapter_id']}")
+            print("atlas_before=" + atlas_before.replace("\n", "\\n"))
+            print("borealis_before=" + borealis_before.replace("\n", "\\n"))
+            return
         job = poll_job(args.base_url, submitted["job"]["job_id"], args.poll_timeout)
         first_losses = job.get("result", {}).get("first_losses")
         last_losses = job.get("result", {}).get("last_losses")

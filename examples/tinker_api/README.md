@@ -431,6 +431,25 @@ python examples/tinker_api/nemotron_nano_api_smoke_client.py \
   --mode async-train \
   --steps 2 \
   --max-new-tokens 4
+
+# Submit and exit. Use this before intentionally restarting the service.
+python examples/tinker_api/nemotron_nano_api_smoke_client.py \
+  --base-url http://127.0.0.1:18080 \
+  --mode submit-async \
+  --steps 50 \
+  --microbatch-size 4 \
+  --examples-per-adapter 64 \
+  --save-prefix restart-continuation
+
+# After restarting the service with --restore-runs-on-startup and
+# --resume-interrupted-jobs-on-startup, reconnect to the existing job.
+python examples/tinker_api/nemotron_nano_api_smoke_client.py \
+  --base-url http://127.0.0.1:18080 \
+  --mode await-job \
+  --job-id <job_id> \
+  --atlas-run-id <atlas_run> \
+  --borealis-run-id <borealis_run> \
+  --verify-checkpoints
 ```
 
 HTTP smoke result from `2026-05-04`:
@@ -509,10 +528,10 @@ both saved adapters as `ready`, and restored Atlas sampled successfully:
 Tenant Atlas route alpha.\nAnswer: The route is /
 ```
 
-Implementation note: sampling now uses a small manual autoregressive loop
-instead of `model.generate()`. Nemotron's remote-code `generate()` path assumed
-`cache_position` was present and failed in this container. The manual loop is
-slower but sufficient for service validation and avoids kernel/compiler work.
+Implementation note: sampling now tries `model.generate()` first and falls back
+to a small manual autoregressive loop if the model's remote-code generation path
+fails. Earlier Nemotron validation hit a `cache_position` issue in `generate()`,
+so keep the fallback until the full checkpoint/container pair proves otherwise.
 
 ## Backend Benchmark Result
 
