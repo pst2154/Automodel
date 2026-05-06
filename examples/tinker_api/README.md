@@ -34,6 +34,9 @@ What works now:
 - Text SFT helper endpoint for tokenizing separate adapter tasks before
   training.
 - SQLite metadata by default at `$SCRATCH/tinker_api/metadata.sqlite3`.
+- Server-owned train jobs store large tokenized requests as file-backed
+  manifests under `$SCRATCH/tinker_api/train_requests/` so `/jobs` metadata
+  stays compact and restart-resumable.
 - Idempotency keys for retryable mutating endpoints.
 - Basic bearer-token auth, `X-Tinker-Tenant-Id` request scoping, per-tenant run
   caps, and per-tenant rate limits.
@@ -562,6 +565,7 @@ tile.
   `30 passed` with `uv run python -m pytest tests/unit_tests/services/test_tinker_api_server.py -q`.
 - Full Nemotron HTTP large-workload async train/inference/save validation:
   passed.
+- File-backed `/train_steps` request manifest resume tests: passed.
 - Nemotron direct mixed-LoRA validation: passed.
 - Nemotron HTTP mixed-LoRA train/inference/save validation: passed.
 - Nemotron HTTP restart restore validation: passed.
@@ -570,7 +574,7 @@ tile.
 - Local `ruff` and `py_compile`: passed.
 - Focused SFT tokenization regressions: `2 passed`.
 - Broader local Tinker service suite after explicit CUDA skips:
-  `53 passed, 3 skipped`.
+  `54 passed, 3 skipped`.
 
 Local laptop pytest is not reliable because the local environment has a
 `tokenizers`/`transformers` version mismatch. Use the container for meaningful
@@ -587,7 +591,7 @@ test results.
 2. **Run restart continuation on the large-workload path.**
    Start a long `/train_steps` job, interrupt the API process, restart with
    `--resume-interrupted-jobs-on-startup`, and confirm it resumes from
-   persisted job progress instead of starting over.
+   the file-backed request manifest instead of starting over.
 
 3. **Improve inference performance without compiling.**
    Keep the manual sampling fallback, but prefer `generate()` when a model

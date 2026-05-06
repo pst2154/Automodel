@@ -459,6 +459,18 @@ def _fingerprint_request(operation: str, request: BaseModel) -> str:
     return sha256(encoded).hexdigest()
 
 
+def _digest_json(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _atomic_write_json(path: pathlib.Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + f".tmp-{uuid.uuid4().hex[:8]}")
+    tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    tmp_path.replace(path)
+
+
 def _load_operator_ui() -> str:
     return (pathlib.Path(__file__).with_name("operator_ui.html")).read_text(encoding="utf-8")
 
@@ -844,6 +856,48 @@ def create_app(
         key="idempotency",
         record_type=IdempotencyRecord,
     )
+    train_request_dir = pathlib.Path(scratch_dir) / "tinker_api" / "train_requests"
+
+    def save_train_request_manifest(job_id: str, request: TrainStepsRequest) -> dict[str, Any]:
+        request_payload = _model_to_dict(request)
+        path = train_request_dir / f"{job_id}.json"
+        digest = _digest_json(request_payload)
+        _atomic_write_json(path, request_payload)
+        examples_by_run = {run_id: len(batch) for run_id, batch in request.batches.items()}
+        return {
+            "kind": "file",
+            "path": str(path),
+            "sha256": digest,
+            "num_runs": len(request.batches),
+            "examples_by_run": examples_by_run,
+            "total_examples": sum(examples_by_run.values()),
+            "batch_size": request.batch_size,
+            "microbatch_size": request.microbatch_size,
+            "loss_fn": request.loss_fn,
+        }
+
+    def load_train_request_from_progress(progress: dict[str, Any]) -> TrainStepsRequest | None:
+        legacy_request = progress.get("request")
+        if legacy_request is not None:
+            return TrainStepsRequest(**legacy_request)
+        request_ref = progress.get("request_ref")
+        if not isinstance(request_ref, dict) or request_ref.get("kind") != "file":
+            return None
+        path = pathlib.Path(str(request_ref.get("path", "")))
+        if not path.is_file():
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        expected_digest = request_ref.get("sha256")
+        if expected_digest is not None and _digest_json(payload) != expected_digest:
+            raise ValueError(f"Train request manifest failed checksum validation: {path}")
+        return TrainStepsRequest(**payload)
+
+    def progress_has_train_request(progress: dict[str, Any]) -> bool:
+        if progress.get("request") is not None:
+            return True
+        request_ref = progress.get("request_ref")
+        return isinstance(request_ref, dict) and pathlib.Path(str(request_ref.get("path", ""))).is_file()
+
     records: dict[str, RunRecord] = run_store.load()
     runs: dict[str, MixedLoraTrainingClient] = {}
     for run_id, record in records.items():
@@ -871,12 +925,12 @@ def create_app(
     jobs: dict[str, JobRecord] = job_store.load()
     for job in jobs.values():
         if job.status in {"queued", "running", "canceling"}:
-            request_payload = job.progress.get("request") if isinstance(job.progress, dict) else None
             can_resume = (
                 resume_interrupted_jobs_on_startup
                 and restore_runs_on_startup
                 and job.kind == "train_steps"
-                and request_payload is not None
+                and isinstance(job.progress, dict)
+                and progress_has_train_request(job.progress)
             )
             if can_resume:
                 job.status = "queued"
@@ -1623,14 +1677,16 @@ def create_app(
         start_step = int(existing_progress.get("step", 0))
         first_losses = existing_progress.get("first_losses")
         last_losses = existing_progress.get("last_losses")
-        progress_request = existing_progress.get("request", _model_to_dict(request))
+        progress_request_ref = existing_progress.get("request_ref")
+        if progress_request_ref is None:
+            progress_request_ref = save_train_request_manifest(job.job_id, request)
         mark_job(
             job.job_id,
             status="running",
             progress={
                 "step": start_step,
                 "total_steps": request.steps,
-                "request": progress_request,
+                "request_ref": progress_request_ref,
                 "first_losses": first_losses,
                 "last_losses": last_losses,
             },
@@ -1700,7 +1756,7 @@ def create_app(
                     progress={
                         "step": step + 1,
                         "total_steps": request.steps,
-                        "request": progress_request,
+                        "request_ref": progress_request_ref,
                         "first_losses": first_losses,
                         "last_losses": losses,
                     },
@@ -1741,8 +1797,18 @@ def create_app(
         for job in list(jobs.values()):
             if job.kind != "train_steps" or job.status != "queued":
                 continue
-            request_payload = job.progress.get("request") if isinstance(job.progress, dict) else None
-            if request_payload is None:
+            if not isinstance(job.progress, dict):
+                continue
+            try:
+                request = load_train_request_from_progress(job.progress)
+            except Exception as exc:
+                mark_job(
+                    job.job_id,
+                    status="failed",
+                    error=f"Cannot resume job; train request manifest is invalid: {type(exc).__name__}: {exc}",
+                )
+                continue
+            if request is None:
                 continue
             missing_runs = [run_id for run_id in job.run_ids if run_id not in runs]
             if missing_runs:
@@ -1752,7 +1818,6 @@ def create_app(
                     error=f"Cannot resume job; runs are not resident after restart: {missing_runs}",
                 )
                 continue
-            request = TrainStepsRequest(**request_payload)
             executor.submit(
                 lambda request=request, job=job: service_metrics.observe(
                     "train_steps.resume",
@@ -1939,12 +2004,13 @@ def create_app(
         tenant_id = tenant_for_runs(list(request.batches), request.tenant_id)
         enforce_tenant_rate_limit(tenant_id, "train_steps")
         job = create_job("train_steps", list(request.batches), tenant_id)
+        request_ref = save_train_request_manifest(job.job_id, request)
         mark_job(
             job.job_id,
             progress={
                 "step": 0,
                 "total_steps": request.steps,
-                "request": _model_to_dict(request),
+                "request_ref": request_ref,
             },
         )
         if request.run_async:

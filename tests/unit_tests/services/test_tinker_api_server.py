@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+import pathlib
 import threading
 import time
 from types import SimpleNamespace
@@ -934,6 +936,9 @@ def test_mixed_lora_server_runs_server_owned_train_steps(monkeypatch, tmp_path):
 
     assert response["job"]["status"] == "succeeded"
     assert response["job"]["progress"]["step"] == 3
+    assert "request" not in response["job"]["progress"]
+    assert response["job"]["progress"]["request_ref"]["kind"] == "file"
+    assert pathlib.Path(response["job"]["progress"]["request_ref"]["path"]).is_file()
     assert response["job"]["result"]["last_losses"][first["run_id"]] == 1.0
     assert response["runs"][first["run_id"]]["optimizer_steps"] == 3
     assert response["runs"][first["run_id"]]["last_checkpoint_path"] == "/tmp/atlas-job"
@@ -1038,6 +1043,67 @@ def test_mixed_lora_server_resumes_interrupted_train_job_on_startup(monkeypatch,
 
     assert resumed["status"] == "succeeded"
     assert resumed["progress"]["step"] == 3
+    assert run["optimizer_steps"] == 9
+
+
+def test_mixed_lora_server_resumes_interrupted_train_job_from_manifest(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    created = client.post(
+        "/runs",
+        json={"name": "restored", "adapter_id": "adapter_resumed", "checkpoint_path": "/tmp/checkpoint"},
+    ).json()
+    request_payload = {
+        "batches": {created["run_id"]: [{"model_input": {"tokens": [1, 2, 3]}, "loss_fn_inputs": {}}]},
+        "steps": 3,
+        "learning_rate": 0.001,
+        "microbatch_size": 1,
+    }
+    request_path = tmp_path / "tinker_api" / "train_requests" / "job_resume_manifest.json"
+    request_path.parent.mkdir(parents=True)
+    request_path.write_text(json.dumps(request_payload, sort_keys=True), encoding="utf-8")
+    now = server._utc_now()
+    job = server.JobRecord(
+        job_id="job_resume_manifest",
+        kind="train_steps",
+        status="running",
+        run_ids=[created["run_id"]],
+        progress={
+            "step": 1,
+            "total_steps": 3,
+            "request_ref": {
+                "kind": "file",
+                "path": str(request_path),
+                "sha256": server._digest_json(request_payload),
+            },
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    store = server.SQLiteStore(tmp_path / "tinker_api" / "metadata.sqlite3", "jobs", server.JobRecord)
+    store.save({"job_resume_manifest": job})
+
+    restarted = server.create_app(
+        base_model="fake-model",
+        scratch_dir=tmp_path,
+        restore_runs_on_startup=True,
+        resume_interrupted_jobs_on_startup=True,
+    )
+    restarted_client = fastapi_testclient.TestClient(restarted)
+
+    resumed = restarted_client.get("/jobs/job_resume_manifest").json()
+    for _ in range(20):
+        if resumed["status"] == "succeeded":
+            break
+        time.sleep(0.05)
+        resumed = restarted_client.get("/jobs/job_resume_manifest").json()
+    run = restarted_client.get(f"/runs/{created['run_id']}").json()
+
+    assert resumed["status"] == "succeeded"
+    assert resumed["progress"]["step"] == 3
+    assert "request" not in resumed["progress"]
+    assert resumed["progress"]["request_ref"]["path"] == str(request_path)
     assert run["optimizer_steps"] == 9
 
 
