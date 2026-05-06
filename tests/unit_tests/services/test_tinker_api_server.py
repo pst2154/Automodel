@@ -99,7 +99,15 @@ class FakeMixedLoraServiceClient:
         return APIFuture(outputs)
 
     def sample(self, adapter_id, prompt, params):
-        return APIFuture(SampleResponse(tokens=[1, 2, 3], text=f"{prompt} {adapter_id}"))
+        generated_logprobs = [-0.5] if params.return_logprobs else None
+        return APIFuture(
+            SampleResponse(
+                tokens=[1, 2, 3],
+                text=f"{prompt} {adapter_id}",
+                prompt_token_count=2,
+                generated_logprobs=generated_logprobs,
+            )
+        )
 
 
 def test_mixed_lora_server_tracks_run_lifecycle(monkeypatch, tmp_path):
@@ -965,6 +973,7 @@ def test_mixed_lora_server_exposes_openai_responses_for_gym(monkeypatch, tmp_pat
             "input": [{"role": "user", "content": "hello"}],
             "max_output_tokens": 4,
             "temperature": 0,
+            "tinker_return_logprobs": True,
         },
     ).json()
 
@@ -972,6 +981,8 @@ def test_mixed_lora_server_exposes_openai_responses_for_gym(monkeypatch, tmp_pat
     assert response["model"] == "atlas"
     assert response["output"][0]["content"][0]["type"] == "output_text"
     assert response["output"][0]["content"][0]["text"] == " adapter_1"
+    assert response["tinker_rl"]["tokens"] == [1, 2, 3]
+    assert response["tinker_rl"]["generated_logprobs"] == [-0.5]
     assert client.post("/v1/responses", json={"model": created["run_id"], "input": "hello"}).status_code == 200
 
 

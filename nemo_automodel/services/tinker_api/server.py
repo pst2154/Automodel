@@ -160,6 +160,7 @@ class SampleRequest(BaseModel):
     temperature: float = 0.7
     top_p: float = 0.95
     do_sample: bool = True
+    return_logprobs: bool = False
 
 
 class TrainStepsRequest(BaseModel):
@@ -445,6 +446,7 @@ def _sampling_from_request(request: SampleRequest) -> SamplingParams:
         temperature=request.temperature,
         top_p=request.top_p,
         do_sample=request.do_sample,
+        return_logprobs=request.return_logprobs,
     )
 
 
@@ -526,6 +528,17 @@ def _openai_messages_to_prompt(messages: Any) -> str:
     if not prompt_parts:
         return ""
     return "\n".join(prompt_parts) + "\nassistant:"
+
+
+def _optional_float(value: Any, default: float) -> float:
+    if value is None:
+        return default
+    return float(value)
+
+
+def _metadata_flag(body: dict[str, Any], key: str) -> bool:
+    metadata = body.get("metadata")
+    return bool(body.get(key) or (isinstance(metadata, dict) and metadata.get(key)))
 
 
 def _resolve_rl_path(repo_dir: pathlib.Path, relative_path: str, field_name: str) -> pathlib.Path:
@@ -2001,19 +2014,21 @@ def create_app(
         run_id, record = resolve_openai_model_run(str(model_ref) if model_ref is not None else None, http_request)
         prompt = _openai_messages_to_prompt(body.get("input", ""))
         max_new_tokens = int(body.get("max_output_tokens") or body.get("max_tokens") or 256)
-        temperature = float(body.get("temperature", 0.7) or 0.7)
+        temperature = _optional_float(body.get("temperature"), 0.7)
+        return_logprobs = _metadata_flag(body, "tinker_return_logprobs")
         output = service.sample(
             get_run(run_id).adapter_id,
             prompt,
             SamplingParams(
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
-                top_p=float(body.get("top_p", 0.95) or 0.95),
+                top_p=_optional_float(body.get("top_p"), 0.95),
                 do_sample=temperature > 0.0,
+                return_logprobs=return_logprobs,
             ),
         ).result()
         text = output.text[len(prompt) :] if output.text.startswith(prompt) else output.text
-        return {
+        response = {
             "id": f"resp_{uuid.uuid4().hex}",
             "created_at": time.time(),
             "error": None,
@@ -2034,6 +2049,13 @@ def create_app(
             "tool_choice": body.get("tool_choice", "auto"),
             "tools": body.get("tools", []),
         }
+        if output.generated_logprobs is not None:
+            response["tinker_rl"] = {
+                "tokens": output.tokens,
+                "prompt_token_count": output.prompt_token_count,
+                "generated_logprobs": output.generated_logprobs,
+            }
+        return response
 
     @app.post("/v1/chat/completions")
     def openai_chat_completions(body: dict[str, Any], http_request: Request) -> dict[str, Any]:
@@ -2041,19 +2063,21 @@ def create_app(
         run_id, record = resolve_openai_model_run(str(model_ref) if model_ref is not None else None, http_request)
         prompt = _openai_messages_to_prompt(body.get("messages", []))
         max_new_tokens = int(body.get("max_completion_tokens") or body.get("max_tokens") or 256)
-        temperature = float(body.get("temperature", 0.7) or 0.7)
+        temperature = _optional_float(body.get("temperature"), 0.7)
+        return_logprobs = _metadata_flag(body, "tinker_return_logprobs")
         output = service.sample(
             get_run(run_id).adapter_id,
             prompt,
             SamplingParams(
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
-                top_p=float(body.get("top_p", 0.95) or 0.95),
+                top_p=_optional_float(body.get("top_p"), 0.95),
                 do_sample=temperature > 0.0,
+                return_logprobs=return_logprobs,
             ),
         ).result()
         text = output.text[len(prompt) :] if output.text.startswith(prompt) else output.text
-        return {
+        response = {
             "id": f"chatcmpl_{uuid.uuid4().hex}",
             "choices": [
                 {
@@ -2069,6 +2093,13 @@ def create_app(
             "model": record.name or record.run_id,
             "object": "chat.completion",
         }
+        if output.generated_logprobs is not None:
+            response["tinker_rl"] = {
+                "tokens": output.tokens,
+                "prompt_token_count": output.prompt_token_count,
+                "generated_logprobs": output.generated_logprobs,
+            }
+        return response
 
     @app.get("/jobs", response_model=list[JobSummary])
     def list_jobs(http_request: Request) -> list[JobSummary]:

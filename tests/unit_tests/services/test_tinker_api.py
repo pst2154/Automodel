@@ -16,6 +16,7 @@ import pytest
 import torch
 
 from examples.tinker_api.api_smoke_client import Example, build_datum
+from examples.tinker_api.gym_rollouts_to_tinker_rl import convert_rollouts
 from nemo_automodel.services.tinker_api import client as tinker_client
 from nemo_automodel.services.tinker_api.client import _build_batch
 from nemo_automodel.services.tinker_api.future import APIFuture
@@ -214,6 +215,43 @@ def test_mixed_lora_sample_falls_back_to_manual_loop_when_generate_fails():
     assert model.generate_calls == 1
     assert model.forward_calls == 2
     assert output.tokens == [1, 2, 6, 6]
+    assert len(output.generated_logprobs) == 2
+
+
+def test_gym_rollout_converter_builds_rl_datum_from_tinker_logprobs():
+    row = {
+        "responses_create_params": {"input": [{"role": "user", "content": "hello"}]},
+        "response": {
+            "output": [{"content": [{"type": "output_text", "text": "world"}]}],
+            "tinker_rl": {
+                "tokens": [10, 11, 12, 13],
+                "prompt_token_count": 2,
+                "generated_logprobs": [-0.7, -0.2],
+            },
+        },
+        "reward": 1.0,
+    }
+
+    datums = convert_rollouts(
+        [row],
+        _FakeTokenizer(),
+        reward_baseline=0.25,
+        reward_scale=2.0,
+        allow_missing_logprobs=False,
+        max_tokens=None,
+    )
+
+    assert datums == [
+        {
+            "model_input": {"tokens": [10, 11, 12]},
+            "loss_fn_inputs": {
+                "target_tokens": {"tokens": [11, 12, 13]},
+                "weights": [0.0, 1.0, 1.0],
+                "logprobs": [0.0, -0.7, -0.2],
+                "advantages": [0.0, 1.5, 1.5],
+            },
+        }
+    ]
 
 
 def test_mixed_lora_layer_grouped_backend_matches_loop_forward_backward():

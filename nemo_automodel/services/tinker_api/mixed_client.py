@@ -745,12 +745,14 @@ class MixedLoraServiceClient:
             generate_kwargs["eos_token_id"] = self.tokenizer.eos_token_id
         return self.model.generate(**generate_kwargs)
 
-    def _sample_with_manual_loop(self, encoded: Any, params: SamplingParams) -> torch.Tensor:
+    def _sample_with_manual_loop(self, encoded: Any, params: SamplingParams) -> tuple[torch.Tensor, list[float]]:
         output_ids = encoded["input_ids"]
         attention_mask = encoded.get("attention_mask")
+        generated_logprobs = []
         for _ in range(params.max_new_tokens):
             outputs = self.model(input_ids=output_ids, attention_mask=attention_mask)
             next_token_logits = outputs.logits[:, -1, :]
+            logprobs = torch.log_softmax(next_token_logits, dim=-1)
             if params.do_sample:
                 temperature = max(params.temperature, 1e-6)
                 probs = torch.softmax(next_token_logits / temperature, dim=-1)
@@ -766,10 +768,11 @@ class MixedLoraServiceClient:
                 next_token = torch.multinomial(probs, num_samples=1)
             else:
                 next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+            generated_logprobs.append(float(logprobs.gather(-1, next_token).squeeze(-1).detach().cpu()[0]))
             output_ids = torch.cat([output_ids, next_token], dim=-1)
             if attention_mask is not None:
                 attention_mask = torch.cat([attention_mask, torch.ones_like(next_token)], dim=-1)
-        return output_ids
+        return output_ids, generated_logprobs
 
     def sample(
         self, adapter_id: str, prompt: str, params: Optional[SamplingParams] = None
@@ -781,15 +784,26 @@ class MixedLoraServiceClient:
         try:
             self.model.eval()
             with torch.no_grad():
+                prompt_token_count = int(encoded["input_ids"].shape[-1])
+                generated_logprobs = None
                 try:
+                    if params.return_logprobs:
+                        raise RuntimeError("manual sampling is required when return_logprobs=True")
                     output_ids = self._sample_with_generate(encoded, params)
                 except Exception:
-                    output_ids = self._sample_with_manual_loop(encoded, params)
+                    output_ids, generated_logprobs = self._sample_with_manual_loop(encoded, params)
             output_ids = output_ids[0]
         finally:
             self._set_active_ranges([])
         text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
-        return APIFuture(SampleResponse(tokens=output_ids.detach().cpu().tolist(), text=text))
+        return APIFuture(
+            SampleResponse(
+                tokens=output_ids.detach().cpu().tolist(),
+                text=text,
+                prompt_token_count=prompt_token_count,
+                generated_logprobs=generated_logprobs,
+            )
+        )
 
 
 class MixedLoraTrainingClient:

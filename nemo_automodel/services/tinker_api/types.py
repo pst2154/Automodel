@@ -106,6 +106,7 @@ class SamplingParams:
     temperature: float = 0.7
     top_p: float = 0.95
     do_sample: bool = True
+    return_logprobs: bool = False
 
 
 @dataclass
@@ -114,3 +115,5 @@ class SampleResponse:
 
     tokens: list[int]
     text: str
+    prompt_token_count: int = 0
+    generated_logprobs: Optional[list[float]] = None

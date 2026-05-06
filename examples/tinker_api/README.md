@@ -252,10 +252,30 @@ policy_model_name: nemotron-atlas
 
 Supported endpoints are intentionally minimal: `/v1/responses` and
 `/v1/chat/completions` route to `POST /runs/{run_id}/sample`. This is enough for
-Gym's simple rollout path and verifier reward loop, but it does not yet return
-training logprobs/token IDs or tool-call outputs. For RL training data, collect
-Gym rollouts first, then convert accepted responses into Tinker `Datum` batches
-or launch NeMo-RL through the existing `/rl/jobs` bridge.
+Gym's simple rollout path and verifier reward loop. Add
+`"tinker_return_logprobs": true` to Gym `responses_create_params` to force the
+manual sampling path and include `response.tinker_rl` with sampled tokens,
+prompt length, and generated-token logprobs.
+
+Convert Gym rollout JSONL into a Tinker RL `/train_steps` payload:
+
+```bash
+python examples/tinker_api/gym_rollouts_to_tinker_rl.py \
+  --input-jsonl /path/to/gym_rollouts.jsonl \
+  --output-json /tmp/tinker_rl_payload.json \
+  --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
+  --cache-dir /home/scratch.asteiner/hf \
+  --run-id run_... \
+  --loss-fn importance_sampling \
+  --reward-baseline 0.5 \
+  --microbatch-size 4
+```
+
+This is a first RL-LoRA bridge: Gym supplies prompt/response/reward, the Tinker
+OpenAI endpoint supplies token/logprob traces, and the converter builds
+`weights`, `logprobs`, and `advantages` for Tinker RL losses. It does not yet
+implement production GRPO/PPO advantage estimation, KL/reference-model control,
+or tool-call output training.
 
 ### NeMo-RL Bridge
 
@@ -610,6 +630,7 @@ tile.
 - File-backed `/train_steps` request manifest resume tests: passed.
 - Sampling fast-path and manual fallback tests: passed.
 - OpenAI-compatible NeMo Gym bridge endpoint tests: passed.
+- Gym rollout to Tinker RL datum converter tests: passed.
 - Nemotron direct mixed-LoRA validation: passed.
 - Nemotron HTTP mixed-LoRA train/inference/save validation: passed.
 - Nemotron HTTP restart restore validation: passed.
@@ -618,7 +639,7 @@ tile.
 - Local `ruff` and `py_compile`: passed.
 - Focused SFT tokenization regressions: `2 passed`.
 - Broader local Tinker service suite after explicit CUDA skips:
-  `58 passed, 3 skipped`.
+  `59 passed, 3 skipped`.
 
 Local laptop pytest is not reliable because the local environment has a
 `tokenizers`/`transformers` version mismatch. Use the container for meaningful
