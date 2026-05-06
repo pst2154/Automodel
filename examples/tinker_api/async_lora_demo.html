@@ -124,7 +124,7 @@
 
       .modebar {
         display: grid;
-        grid-template-columns: repeat(2, minmax(112px, 1fr));
+        grid-template-columns: repeat(3, minmax(112px, 1fr));
         gap: 8px;
       }
 
@@ -634,15 +634,16 @@
     <header>
       <div>
         <span class="brand">Nemotron Tinker</span>
-        <h1>Async LoRA + RL</h1>
+        <h1>Adapter Flywheel</h1>
         <p class="subtitle">
-          A realistic single-node prototype flow: SFT datasets, RL rollouts, Gym policy calls, and NeMo-RL jobs arrive
-          at different times while Nemotron Tinker keeps one base model resident and controls adapter work through APIs.
+          A realistic single-node prototype flow: keep one base model hot, create adapters, collect data, train,
+          sample, evaluate, improve, and repeat through the same API surface.
         </p>
       </div>
       <div class="controls">
         <div class="modebar" aria-label="Demo mode">
-          <button class="secondary active" data-mode="sft">SFT</button>
+          <button class="secondary active" data-mode="flywheel">Flywheel</button>
+          <button class="secondary" data-mode="sft">SFT</button>
           <button class="secondary" data-mode="rl">RL LoRA</button>
           <button class="secondary" data-mode="gym">Gym</button>
           <button class="secondary" data-mode="nemo">NeMo-RL</button>
@@ -776,11 +777,78 @@
       const $ = (id) => document.getElementById(id);
       const adapters = ["atlas", "borealis", "comet"];
       const timers = [];
-      let activeMode = "sft";
+      let activeMode = "flywheel";
       let startedAt = performance.now();
       let clockTimer = null;
 
       const scenarios = {
+        flywheel: {
+          inputTitle: "Data Flywheel",
+          inputTag: "repeat",
+          apiTitle: "SDK/API Loop",
+          apiTag: "serve-train",
+          workerTitle: "Resident Base",
+          workerTag: "hot",
+          outputTitle: "Adapter State",
+          outputTag: "improves",
+          gpuTitle: "Nemotron Base",
+          gpuSubtitle: "stays online while adapters iterate",
+          uploadsLabel: "data cycles",
+          activeLabel: "loop steps",
+          readyLabel: "improved adapters",
+          samplesTitle: "Flywheel Outputs",
+          readyCaption:
+            "The flywheel is serve, collect, train, sample, evaluate, improve, repeat while the base model stays resident.",
+          apiSteps: [
+            ["Base online", "Load Nemotron once and keep it hot."],
+            ["Adapter created", "Create a LoRA for each task, tenant, or experiment."],
+            ["Data in", "SFT rows, Gym rollouts, rewards, and eval prompts enter the loop."],
+            ["Train and sample", "Run train_steps, sample immediately, evaluate, then add better data."],
+          ],
+          events: [
+            ["Base online", "The shared model is loaded once."],
+            ["Adapter created", "A LoRA is attached for the first task."],
+            ["Data in", "Examples, rollouts, rewards, and eval prompts arrive."],
+            ["Train and sample", "The adapter updates and is tested through the same API."],
+            ["Improve data", "Failures become new examples or rewards."],
+            ["Repeat", "Another adapter joins without unloading the base model."],
+          ],
+          items: {
+            atlas: {
+              title: "cycle_01_seed_data.jsonl",
+              tenant: "tenant-a",
+              meta: ["SFT rows", "eval prompts", "rank 8", "start"],
+              adapter: "Atlas v1",
+              adapterMeta: ["CREATE", "first adapter"],
+              job: "create_adapter",
+              uploadCaption: ["Base Online", "Nemotron is loaded once. Atlas gets a LoRA instead of a whole new model."],
+              trainCaption: "Atlas trains on seed examples, then samples immediately for evaluation.",
+              sample: "Cycle 1: Atlas answers the route task, misses edge cases, and emits eval failures.",
+            },
+            borealis: {
+              title: "cycle_02_failures_rewards.jsonl",
+              tenant: "tenant-a",
+              meta: ["failures", "rewards", "Gym traces", "improve"],
+              adapter: "Atlas v2",
+              adapterMeta: ["IMPROVE", "same adapter"],
+              job: "train_improve",
+              uploadCaption: ["Improve Data", "Bad samples become better SFT rows, rewards, or verifier-labeled rollouts."],
+              trainCaption: "The same resident adapter is improved without reloading the base model.",
+              sample: "Cycle 2: Atlas handles the edge cases and produces cleaner, shorter route answers.",
+            },
+            comet: {
+              title: "cycle_03_new_task.jsonl",
+              tenant: "tenant-b",
+              meta: ["new adapter", "async", "separate data", "repeat"],
+              adapter: "Comet v1",
+              adapterMeta: ["REPEAT", "new task"],
+              job: "new_adapter",
+              uploadCaption: ["Repeat", "A second task creates its own adapter while the base remains online."],
+              trainCaption: "Comet enters the same flywheel independently: collect, train, sample, evaluate.",
+              sample: "Cycle 3: Comet becomes a separate support adapter while Atlas keeps its learned behavior.",
+            },
+          },
+        },
         sft: {
           inputTitle: "Client Uploads",
           inputTag: "JSONL",

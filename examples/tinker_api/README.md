@@ -22,7 +22,7 @@ AutoModel. It includes:
   checkpointing, async jobs, tenant scoping, and worker metadata.
 - A small Python SDK for experiment code.
 - Named workload recipes for repeatable SFT and RL tests.
-- A standalone Nemotron-themed async demo.
+- A standalone Nemotron-themed adapter flywheel demo.
 - An operator UI at `/ui` when the service is running.
 
 The branch focus is single-node V1 readiness. The service has been validated on
@@ -78,7 +78,7 @@ Open the operator UI:
 http://127.0.0.1:18080/ui
 ```
 
-Open the standalone demo directly in a browser:
+Open the standalone flywheel demo directly in a browser:
 
 ```text
 examples/tinker_api/async_lora_demo.html
