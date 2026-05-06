@@ -957,7 +957,10 @@ def test_mixed_lora_server_runs_server_owned_train_steps(monkeypatch, tmp_path):
     assert "result" not in jobs[0]
     assert "request" not in jobs[0]["progress"]
     assert "sha256" not in jobs[0]["progress"]["request_ref"]
-    assert client.get(f"/jobs/{jobs[0]['job_id']}").json()["result"]["last_losses"][first["run_id"]] == 1.0
+    job = client.get(f"/jobs/{jobs[0]['job_id']}").json()
+    assert job["result"]["last_losses"][first["run_id"]] == 1.0
+    assert "request" not in job["progress"]
+    assert "sha256" not in job["progress"]["request_ref"]
 
 
 def test_mixed_lora_server_exposes_openai_responses_for_gym(monkeypatch, tmp_path):

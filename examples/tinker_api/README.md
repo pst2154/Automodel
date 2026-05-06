@@ -556,6 +556,53 @@ borealis_after=Tenant Borealis route alpha.\nAnswer: borealis-7...
 checkpoint_files_verified=true
 ```
 
+Larger full-model stress result from `2026-05-06` on `alon-ts1-iec-16`:
+
+```bash
+docker exec nvidia-tinker-nemotron-ms \
+  python examples/tinker_api/nemotron_nano_api_smoke_client.py \
+    --base-url http://127.0.0.1:18081 \
+    --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
+    --cache-dir /home/scratch.asteiner/hf \
+    --mode async-train \
+    --steps 75 \
+    --batch-size 1 \
+    --microbatch-size 4 \
+    --examples-per-adapter 96 \
+    --lr 5e-5 \
+    --max-tokens 128 \
+    --max-new-tokens 24 \
+    --poll-timeout 10800 \
+    --tenant-id nemotron-large-workload-v3 \
+    --save-prefix nemotron-large-workload-v3 \
+    --verify-checkpoints
+```
+
+Result:
+
+```text
+job_id=job_1ab6a860530d
+atlas_run=run_6b37bee6ce2b adapter=adapter_9a12d496086e
+borealis_run=run_8ea548cb5bb7 adapter=adapter_ba017b4ba238
+steps=75
+examples_per_adapter=96
+microbatch_size=4
+atlas_loss=3451.9926 -> 599.2604
+borealis_loss=3315.5939 -> 580.1720
+atlas_loss_mean=0.9363
+borealis_loss_mean=0.9065
+loss_weight_mean=1.0
+atlas_after=Tenant Atlas route alpha.\nAnswer: atlas-123...
+borealis_after=Tenant Borealis route alpha.\nAnswer: borealis-12...
+checkpoint_files_verified=true
+```
+
+This run exposed one API-surface issue on older in-memory service code:
+`GET /jobs/{job_id}` could return the full inline tokenized request while a
+large job was running. The current branch redacts `progress.request` and the
+manifest digest from both job list and job detail responses while preserving the
+internal manifest needed for restart recovery.
+
 The first large attempt OOMed because `/train_steps` forwarded the whole batch
 at once. After adding server-owned microbatch accumulation it still OOMed until
 two real issues were fixed: cross-entropy no longer materializes full-vocab

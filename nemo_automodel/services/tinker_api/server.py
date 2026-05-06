@@ -1514,6 +1514,27 @@ def create_app(
             updated_at=job.updated_at,
         )
 
+    def compact_job_record(job: JobRecord) -> JobRecord:
+        progress = dict(job.progress)
+        progress.pop("request", None)
+        if isinstance(progress.get("request_ref"), dict):
+            request_ref = dict(progress["request_ref"])
+            request_ref.pop("sha256", None)
+            progress["request_ref"] = request_ref
+        return JobRecord(
+            job_id=job.job_id,
+            kind=job.kind,
+            status=job.status,
+            tenant_id=job.tenant_id,
+            sequence=job.sequence,
+            run_ids=list(job.run_ids),
+            progress=progress,
+            result=job.result,
+            error=job.error,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
+        )
+
     def fail_job(job_id: str, exc: Exception) -> None:
         mark_job(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
 
@@ -2112,7 +2133,7 @@ def create_app(
     def get_job(job_id: str, http_request: Request) -> JobRecord:
         job = get_job_record(job_id)
         authorize_tenant(job.tenant_id, http_request)
-        return job
+        return compact_job_record(job)
 
     @app.post("/jobs/{job_id}/cancel", response_model=JobRecord)
     def cancel_job(job_id: str, http_request: Request) -> JobRecord:
