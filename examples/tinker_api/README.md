@@ -207,6 +207,8 @@ POST /train_steps
 GET  /jobs
 GET  /jobs/{job_id}
 POST /jobs/{job_id}/cancel
+POST /v1/responses
+POST /v1/chat/completions
 POST /rl/jobs
 GET  /rl/jobs
 GET  /rl/jobs/{job_id}
@@ -235,6 +237,25 @@ Authorization: Bearer <token>  # only when TINKER_API_KEY/--api-key is set
 When the tenant header is present, `/runs` and `/jobs` only return that
 tenant's resources, and run/job operations fail with `403` if the resource
 belongs to another tenant.
+
+### NeMo Gym Bridge
+
+NeMo Gym can use the Tinker service as a single-node OpenAI-compatible policy
+endpoint for rollout collection. Point Gym's model config at the Tinker API and
+use a resident LoRA run id, adapter id, or run name as the model:
+
+```yaml
+policy_base_url: http://127.0.0.1:18080/v1
+policy_api_key: ""
+policy_model_name: nemotron-atlas
+```
+
+Supported endpoints are intentionally minimal: `/v1/responses` and
+`/v1/chat/completions` route to `POST /runs/{run_id}/sample`. This is enough for
+Gym's simple rollout path and verifier reward loop, but it does not yet return
+training logprobs/token IDs or tool-call outputs. For RL training data, collect
+Gym rollouts first, then convert accepted responses into Tinker `Datum` batches
+or launch NeMo-RL through the existing `/rl/jobs` bridge.
 
 ### NeMo-RL Bridge
 
@@ -588,6 +609,7 @@ tile.
   passed.
 - File-backed `/train_steps` request manifest resume tests: passed.
 - Sampling fast-path and manual fallback tests: passed.
+- OpenAI-compatible NeMo Gym bridge endpoint tests: passed.
 - Nemotron direct mixed-LoRA validation: passed.
 - Nemotron HTTP mixed-LoRA train/inference/save validation: passed.
 - Nemotron HTTP restart restore validation: passed.
@@ -596,7 +618,7 @@ tile.
 - Local `ruff` and `py_compile`: passed.
 - Focused SFT tokenization regressions: `2 passed`.
 - Broader local Tinker service suite after explicit CUDA skips:
-  `56 passed, 3 skipped`.
+  `58 passed, 3 skipped`.
 
 Local laptop pytest is not reliable because the local environment has a
 `tokenizers`/`transformers` version mismatch. Use the container for meaningful

@@ -952,6 +952,51 @@ def test_mixed_lora_server_runs_server_owned_train_steps(monkeypatch, tmp_path):
     assert client.get(f"/jobs/{jobs[0]['job_id']}").json()["result"]["last_losses"][first["run_id"]] == 1.0
 
 
+def test_mixed_lora_server_exposes_openai_responses_for_gym(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    created = client.post("/runs", json={"name": "atlas"}).json()
+
+    response = client.post(
+        "/v1/responses",
+        json={
+            "model": "atlas",
+            "input": [{"role": "user", "content": "hello"}],
+            "max_output_tokens": 4,
+            "temperature": 0,
+        },
+    ).json()
+
+    assert response["object"] == "response"
+    assert response["model"] == "atlas"
+    assert response["output"][0]["content"][0]["type"] == "output_text"
+    assert response["output"][0]["content"][0]["text"] == " adapter_1"
+    assert client.post("/v1/responses", json={"model": created["run_id"], "input": "hello"}).status_code == 200
+
+
+def test_mixed_lora_server_exposes_openai_chat_completions_for_gym(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    created = client.post("/runs", json={"name": "atlas"}).json()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": created["adapter_id"],
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 4,
+            "temperature": 0,
+        },
+    ).json()
+
+    assert response["object"] == "chat.completion"
+    assert response["model"] == "atlas"
+    assert response["choices"][0]["message"]["role"] == "assistant"
+    assert response["choices"][0]["message"]["content"] == " adapter_1"
+
+
 def test_mixed_lora_server_microbatches_train_steps(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
     app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)

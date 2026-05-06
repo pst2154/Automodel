@@ -491,6 +491,43 @@ def _load_operator_ui() -> str:
     return (pathlib.Path(__file__).with_name("operator_ui.html")).read_text(encoding="utf-8")
 
 
+def _content_to_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if text is None:
+                    text = item.get("content")
+                if text is not None:
+                    parts.append(str(text))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _openai_messages_to_prompt(messages: Any) -> str:
+    if isinstance(messages, str):
+        return messages
+    if not isinstance(messages, list):
+        return _content_to_text(messages)
+    prompt_parts = []
+    for message in messages:
+        if isinstance(message, dict):
+            role = message.get("role", "user")
+            content = _content_to_text(message.get("content"))
+            if content:
+                prompt_parts.append(f"{role}: {content}")
+    if not prompt_parts:
+        return ""
+    return "\n".join(prompt_parts) + "\nassistant:"
+
+
 def _resolve_rl_path(repo_dir: pathlib.Path, relative_path: str, field_name: str) -> pathlib.Path:
     candidate = (repo_dir / relative_path).resolve()
     try:
@@ -1355,6 +1392,26 @@ def create_app(
         authorize_tenant(record.tenant_id, http_request)
         return record
 
+    def resolve_openai_model_run(model: Optional[str], http_request: Request) -> tuple[str, RunRecord]:
+        with records_lock:
+            visible_records = [
+                record for record in records.values() if visible_to_request(record.tenant_id, http_request)
+            ]
+        if model is None:
+            ready_records = [record for record in visible_records if record.status == "ready"]
+            if len(ready_records) != 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="OpenAI-compatible requests must set model to a Tinker run_id, adapter_id, or run name.",
+                )
+            record = ready_records[0]
+            return record.run_id, record
+        for record in visible_records:
+            if model in {record.run_id, record.adapter_id, record.name}:
+                authorize_tenant(record.tenant_id, http_request)
+                return record.run_id, record
+        raise HTTPException(status_code=404, detail=f"Unknown Tinker model/run for OpenAI-compatible request: {model}")
+
     def mark_run(run_id: str, *, status: str, error: Optional[str] = None) -> RunRecord:
         with records_lock:
             record = get_record(run_id)
@@ -1937,6 +1994,81 @@ def create_app(
     @app.get("/runs/{run_id}", response_model=RunRecord)
     def get_run_record(run_id: str, http_request: Request) -> RunRecord:
         return get_authorized_record(run_id, http_request)
+
+    @app.post("/v1/responses")
+    def openai_responses(body: dict[str, Any], http_request: Request) -> dict[str, Any]:
+        model_ref = body.get("model")
+        run_id, record = resolve_openai_model_run(str(model_ref) if model_ref is not None else None, http_request)
+        prompt = _openai_messages_to_prompt(body.get("input", ""))
+        max_new_tokens = int(body.get("max_output_tokens") or body.get("max_tokens") or 256)
+        temperature = float(body.get("temperature", 0.7) or 0.7)
+        output = service.sample(
+            get_run(run_id).adapter_id,
+            prompt,
+            SamplingParams(
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=float(body.get("top_p", 0.95) or 0.95),
+                do_sample=temperature > 0.0,
+            ),
+        ).result()
+        text = output.text[len(prompt) :] if output.text.startswith(prompt) else output.text
+        return {
+            "id": f"resp_{uuid.uuid4().hex}",
+            "created_at": time.time(),
+            "error": None,
+            "incomplete_details": None,
+            "model": record.name or record.run_id,
+            "object": "response",
+            "output": [
+                {
+                    "id": f"msg_{uuid.uuid4().hex}",
+                    "content": [{"annotations": [], "text": text, "type": "output_text"}],
+                    "role": "assistant",
+                    "status": "completed",
+                    "type": "message",
+                }
+            ],
+            "parallel_tool_calls": True,
+            "status": "completed",
+            "tool_choice": body.get("tool_choice", "auto"),
+            "tools": body.get("tools", []),
+        }
+
+    @app.post("/v1/chat/completions")
+    def openai_chat_completions(body: dict[str, Any], http_request: Request) -> dict[str, Any]:
+        model_ref = body.get("model")
+        run_id, record = resolve_openai_model_run(str(model_ref) if model_ref is not None else None, http_request)
+        prompt = _openai_messages_to_prompt(body.get("messages", []))
+        max_new_tokens = int(body.get("max_completion_tokens") or body.get("max_tokens") or 256)
+        temperature = float(body.get("temperature", 0.7) or 0.7)
+        output = service.sample(
+            get_run(run_id).adapter_id,
+            prompt,
+            SamplingParams(
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=float(body.get("top_p", 0.95) or 0.95),
+                do_sample=temperature > 0.0,
+            ),
+        ).result()
+        text = output.text[len(prompt) :] if output.text.startswith(prompt) else output.text
+        return {
+            "id": f"chatcmpl_{uuid.uuid4().hex}",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "content": text,
+                        "role": "assistant",
+                    },
+                }
+            ],
+            "created": int(time.time()),
+            "model": record.name or record.run_id,
+            "object": "chat.completion",
+        }
 
     @app.get("/jobs", response_model=list[JobSummary])
     def list_jobs(http_request: Request) -> list[JobSummary]:
