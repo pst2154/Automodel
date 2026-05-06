@@ -169,14 +169,37 @@
         min-width: min(520px, 100%);
       }
 
-      .modebar {
+      .app-shell {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 10px;
+        grid-template-columns: 310px minmax(0, 1fr);
+        gap: 18px;
+        padding: 18px clamp(16px, 4vw, 42px) 36px;
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 16px;
+        align-self: start;
+        display: grid;
+        gap: 12px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px;
+        background: rgba(17, 20, 24, 0.94);
+        box-shadow: var(--shadow);
+      }
+
+      .sidebar h2 {
+        font-size: 18px;
+      }
+
+      .mode-list {
+        display: grid;
+        gap: 8px;
       }
 
       .mode {
-        min-height: 82px;
+        min-height: 74px;
         text-align: left;
         color: var(--ink);
         background: #0c0f12;
@@ -202,7 +225,14 @@
       main {
         display: grid;
         gap: 18px;
-        padding: 18px clamp(16px, 4vw, 42px) 36px;
+      }
+
+      [data-panel] {
+        display: none;
+      }
+
+      [data-panel].active-panel {
+        display: block;
       }
 
       section {
@@ -409,6 +439,19 @@
         background: var(--red-soft);
       }
 
+      .summary-card {
+        display: grid;
+        gap: 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        background: #0c0f12;
+      }
+
+      .summary-card strong {
+        color: var(--green);
+      }
+
       @keyframes pulse {
         from {
           box-shadow: inset 0 0 0 rgba(118, 185, 0, 0);
@@ -420,6 +463,7 @@
 
       @media (max-width: 980px) {
         header,
+        .app-shell,
         .steps,
         .big-actions,
         .two,
@@ -428,10 +472,13 @@
         }
 
         .top,
-        .modebar,
         .three,
         .four {
           grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          position: static;
         }
       }
     </style>
@@ -454,23 +501,30 @@
       </div>
     </header>
 
-    <main>
-      <section>
-        <div class="section-head">
-          <h2>Choose A Workflow</h2>
-          <span id="mode-note" class="tiny">SFT uses the SDK-style create, train_steps, sample loop.</span>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div>
+          <h2>Start Here</h2>
+          <p id="mode-note" class="tiny">SFT uses the SDK-style create, train_steps, sample loop.</p>
         </div>
-        <div class="body">
-          <div class="modebar">
-            <button class="mode active" data-mode="sft"><b>SFT</b><span>Train two LoRAs on different text tasks.</span></button>
-            <button class="mode" data-mode="rl"><b>RL LoRA</b><span>Sample rollouts, reward them, then train adapters.</span></button>
-            <button class="mode" data-mode="gym"><b>Gym</b><span>Use OpenAI-compatible policy calls with logprobs.</span></button>
-            <button class="mode" data-mode="nemo"><b>NeMo-RL</b><span>Launch or dry-run separate GRPO jobs.</span></button>
-          </div>
+        <div class="mode-list">
+          <button class="mode active" data-mode="sft"><b>SFT</b><span>Train two LoRAs on different text tasks.</span></button>
+          <button class="mode" data-mode="rl"><b>RL LoRA</b><span>Rollouts, rewards, advantages, train_steps.</span></button>
+          <button class="mode" data-mode="gym"><b>Gym</b><span>OpenAI-compatible rollout collection.</span></button>
+          <button class="mode" data-mode="nemo"><b>NeMo-RL</b><span>Dry-run or launch a GRPO job.</span></button>
         </div>
-      </section>
+        <div class="summary-card">
+          <strong>Current workspace</strong>
+          <span id="sidebar-workspace" class="tiny">tenant-a</span>
+        </div>
+        <div class="summary-card">
+          <strong>Next action</strong>
+          <span id="next-action" class="tiny">Create two training clients.</span>
+        </div>
+      </aside>
 
-      <section>
+      <main>
+      <section class="active-panel" data-panel="sft">
         <div class="section-head">
           <h2>SDK Training Loop</h2>
           <button id="new-workspace">New Clean Workspace</button>
@@ -495,7 +549,7 @@
         </div>
       </section>
 
-      <section>
+      <section class="active-panel" data-panel="sft">
         <div class="section-head">
           <h2>The Two Jobs</h2>
           <span class="tiny">Atlas and Borealis train on different text.</span>
@@ -525,7 +579,46 @@ Answer:</textarea></label>
         </div>
       </section>
 
-      <section>
+      <section data-panel="rl">
+        <div class="section-head">
+          <h2>RL LoRA</h2>
+          <span class="tiny">Use resident adapters with rollout rewards and RL losses.</span>
+        </div>
+        <div class="body">
+          <div class="steps">
+            <div class="step active"><b>1</b>Sample policy rollouts with logprobs.</div>
+            <div class="step"><b>2</b>Score completions with a verifier or rule reward.</div>
+            <div class="step"><b>3</b>Build advantages and old-logprob inputs.</div>
+            <div class="step"><b>4</b>Train with importance_sampling, ppo, cispo, or dro.</div>
+          </div>
+          <div class="summary-card">
+            <strong>Recommended path</strong>
+            <span class="tiny">Run the checked-in `nemotron_rl_lora` recipe or use the SDK to submit `/train_steps` with RL loss inputs.</span>
+          </div>
+          <pre class="sample">python examples/tinker_api/run_recipe.py nemotron_rl_lora --base-url http://127.0.0.1:18082</pre>
+        </div>
+      </section>
+
+      <section data-panel="gym">
+        <div class="section-head">
+          <h2>Gym Rollouts</h2>
+          <span class="tiny">Collect OpenAI-compatible policy samples for RL training.</span>
+        </div>
+        <div class="body">
+          <div class="two">
+            <label>Resident model / run name<input id="gym-model" value="atlas" /></label>
+            <label>Max output tokens<input id="gym-max-output" type="number" min="1" value="16" /></label>
+          </div>
+          <label>Prompt<textarea id="gym-prompt">Answer in one short sentence: what is adapter routing?</textarea></label>
+          <div class="big-actions">
+            <button id="gym-sample" class="blue">Collect Rollout</button>
+            <button id="gym-copy-note">Show Converter Command</button>
+          </div>
+          <pre id="gym-output" class="sample">Gym rollout output appears here.</pre>
+        </div>
+      </section>
+
+      <section class="active-panel" data-panel="sft">
         <div class="section-head">
           <h2>Results</h2>
           <span class="tiny">Sample buttons use the correct prompt automatically.</span>
@@ -547,7 +640,7 @@ Answer:</textarea></label>
         </div>
       </section>
 
-      <section>
+      <section data-panel="nemo">
         <div class="section-head">
           <h2>NeMo-RL Bridge</h2>
           <span class="tiny">Launch or dry-run GRPO from Nemotron Tinker.</span>
@@ -611,7 +704,8 @@ logger.wandb_enabled=false</textarea></label>
           <pre id="rl-output" class="sample">RL job status appears here.</pre>
         </div>
       </section>
-    </main>
+      </main>
+    </div>
 
     <div id="toast" class="toast"></div>
 
@@ -711,6 +805,22 @@ logger.wandb_enabled=false</textarea></label>
           });
         }
 
+        openAiResponse(model, input, maxOutputTokens) {
+          return this.call(
+            "/v1/responses",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                model,
+                input,
+                max_output_tokens: maxOutputTokens,
+                tinker_return_logprobs: true,
+              }),
+            },
+            true,
+          );
+        }
+
         save(runId, name) {
           return this.call(`/runs/${runId}/save`, { method: "POST", body: JSON.stringify({ name }) });
         }
@@ -759,6 +869,9 @@ logger.wandb_enabled=false</textarea></label>
         document.querySelectorAll("[data-mode]").forEach((button) => {
           button.classList.toggle("active", button.dataset.mode === mode);
         });
+        document.querySelectorAll("[data-panel]").forEach((panel) => {
+          panel.classList.toggle("active-panel", panel.dataset.panel === mode);
+        });
         const notes = {
           sft: "SFT uses the SDK-style createTrainingClient, sftDatum, trainSteps, and sample loop.",
           rl: "RL LoRA uses policy rollouts with logprobs, reward/advantage data, then trainSteps with an RL loss.",
@@ -766,15 +879,18 @@ logger.wandb_enabled=false</textarea></label>
           nemo: "NeMo-RL mode uses the bridge below to dry-run or launch a separate GRPO job.",
         };
         $("mode-note").textContent = notes[mode];
-        $("train-both").textContent = mode === "sft" ? "Run SDK train_steps" : "Run SFT train_steps";
-        $("rl-output").textContent =
-          mode === "nemo"
-            ? "Use the NeMo-RL Bridge controls below to prepare or launch a job."
-            : mode === "gym"
-              ? "Use SDK sample_openai_response(...) or /v1/responses with tinker_return_logprobs=true for Gym rollouts."
-              : mode === "rl"
-                ? "Resident RL LoRA uses rollout JSON with tokens, old logprobs, weights, and advantages."
-                : "RL job status appears here.";
+        $("next-action").textContent =
+          mode === "sft"
+            ? "Create two training clients, train, then sample."
+            : mode === "rl"
+              ? "Run the RL LoRA recipe or submit RL train_steps data."
+              : mode === "gym"
+                ? "Collect a rollout from /v1/responses."
+                : "Prepare a dry-run NeMo-RL command first.";
+        if (mode === "nemo") {
+          $("rl-output").textContent = "Use the NeMo-RL Bridge controls below to prepare or launch a job.";
+        }
+        render();
       }
 
       function setTrainProgress(step, total, status = "running") {
@@ -854,6 +970,7 @@ logger.wandb_enabled=false</textarea></label>
         $("health").textContent = `Service: ${state.health ? state.health.status : "unknown"}`;
         $("model").textContent = `Model: ${state.health ? String(state.health.base_model).split("/").pop() : "-"}`;
         $("workspace-pill").textContent = `Workspace: ${workspace() || "type one"}`;
+        $("sidebar-workspace").textContent = workspace() || "type one";
         renderRun("atlas", a);
         renderRun("borealis", b);
 
@@ -877,6 +994,8 @@ logger.wandb_enabled=false</textarea></label>
         $("rl-launch").disabled = disabled;
         $("rl-refresh").disabled = disabled;
         $("rl-logs").disabled = disabled || state.rlJobs.length === 0;
+        $("gym-sample").disabled = disabled;
+        $("gym-copy-note").disabled = disabled;
         const latestRl = latestRlJob();
         $("rl-cancel").disabled = disabled || !latestRl || !["queued", "running"].includes(latestRl.status);
       }
@@ -972,6 +1091,36 @@ logger.wandb_enabled=false</textarea></label>
         $("rl-output").textContent = JSON.stringify(canceled, null, 2);
         toast(`RL job ${canceled.status}.`);
         await refreshRlOutput(job.job_id);
+      }
+
+      async function collectGymRollout() {
+        setBusy("gym", "Collecting...", "gym-sample");
+        try {
+          const response = await sdk.openAiResponse(
+            $("gym-model").value.trim() || "atlas",
+            $("gym-prompt").value,
+            Number($("gym-max-output").value),
+          );
+          $("gym-output").textContent = JSON.stringify(response, null, 2);
+          raw(response);
+          toast("Gym rollout collected.");
+        } finally {
+          clearBusy();
+        }
+      }
+
+      function showGymConverterCommand() {
+        $("gym-output").textContent = [
+          "python examples/tinker_api/gym_rollouts_to_tinker_rl.py \\",
+          "  --input-jsonl /path/to/gym_rollouts.jsonl \\",
+          "  --output-json /tmp/tinker_rl_payload.json \\",
+          "  --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \\",
+          "  --cache-dir /home/scratch.asteiner/hf \\",
+          "  --run-id run_... \\",
+          "  --loss-fn importance_sampling \\",
+          "  --reward-baseline 0.5 \\",
+          "  --microbatch-size 4",
+        ].join("\n");
       }
 
       async function createMissing() {
@@ -1122,6 +1271,8 @@ logger.wandb_enabled=false</textarea></label>
       document.querySelectorAll("[data-mode]").forEach((button) => {
         button.onclick = () => setMode(button.dataset.mode);
       });
+      $("gym-sample").onclick = () => handle(collectGymRollout);
+      $("gym-copy-note").onclick = showGymConverterCommand;
       $("rl-dry-run").onclick = () => handle(() => submitRlJob(true));
       $("rl-launch").onclick = () => handle(() => submitRlJob(false));
       $("rl-refresh").onclick = () => handle(() => refreshRlOutput());
