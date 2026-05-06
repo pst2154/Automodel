@@ -27,7 +27,7 @@ from typing import Any, Callable
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
-from examples.tinker_api.gym_rollouts_to_tinker_rl import datum_from_tokens, response_text
+from examples.tinker_api.tools.gym_rollouts_to_tinker_rl import datum_from_tokens, response_text
 
 
 @dataclass(frozen=True)

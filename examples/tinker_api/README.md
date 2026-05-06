@@ -50,7 +50,11 @@ workloads, inference, save, restore, and UI/API smoke paths.
 - `examples/tinker_api/run_mixed_lora_server.py`: service entry point.
 - `examples/tinker_api/run_recipe.py`: named workload runner.
 - `examples/tinker_api/recipes/`: SFT and RL workload configs.
-- `examples/tinker_api/async_lora_demo.html`: standalone animated demo.
+- `examples/tinker_api/clients/`: runnable API and workload clients.
+- `examples/tinker_api/tools/`: converters and benchmark helpers.
+- `examples/tinker_api/demos/async_lora_demo.html`: standalone animated demo.
+- `examples/tinker_api/prototypes/`: direct full-model smoke prototypes kept
+  out of the main path.
 
 ## Quick Start
 
@@ -81,7 +85,7 @@ http://127.0.0.1:18080/ui
 Open the standalone flywheel demo directly in a browser:
 
 ```text
-examples/tinker_api/async_lora_demo.html
+examples/tinker_api/demos/async_lora_demo.html
 ```
 
 ## Current Limits

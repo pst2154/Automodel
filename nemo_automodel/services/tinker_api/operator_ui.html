@@ -505,13 +505,12 @@
       <aside class="sidebar">
         <div>
           <h2>Start Here</h2>
-          <p id="mode-note" class="tiny">SFT uses the SDK-style create, train_steps, sample loop.</p>
+          <p id="mode-note" class="tiny">Follow the adapter flywheel: data, SFT, RL improvement, evaluation, inference.</p>
         </div>
         <div class="mode-list">
-          <button class="mode active" data-mode="sft"><b>SFT</b><span>Train two LoRAs on different text tasks.</span></button>
-          <button class="mode" data-mode="rl"><b>RL LoRA</b><span>Rollouts, rewards, advantages, train_steps.</span></button>
-          <button class="mode" data-mode="gym"><b>Gym</b><span>OpenAI-compatible rollout collection.</span></button>
-          <button class="mode" data-mode="nemo"><b>NeMo-RL</b><span>Dry-run or launch a GRPO job.</span></button>
+          <button class="mode active" data-mode="flywheel"><b>Flywheel</b><span>Data -> SFT -> RL -> eval -> inference.</span></button>
+          <button class="mode" data-mode="sft"><b>Train Adapter</b><span>Create LoRAs and run SFT train_steps.</span></button>
+          <button class="mode" data-mode="rl"><b>RL + Eval</b><span>Rollouts, rewards, resident RL, or NeMo-RL jobs.</span></button>
         </div>
         <div class="summary-card">
           <strong>Current workspace</strong>
@@ -519,12 +518,35 @@
         </div>
         <div class="summary-card">
           <strong>Next action</strong>
-          <span id="next-action" class="tiny">Create two training clients.</span>
+          <span id="next-action" class="tiny">Start with data, then run SFT.</span>
         </div>
       </aside>
 
       <main>
-      <section class="active-panel" data-panel="sft">
+      <section class="active-panel" data-panel="flywheel">
+        <div class="section-head">
+          <h2>Adapter Flywheel</h2>
+          <span class="tiny">The order of operations for Nemotron Tinker.</span>
+        </div>
+        <div class="body">
+          <div class="steps">
+            <div class="step active"><b>1</b>Data: upload SFT rows, rollout prompts, rewards, and eval sets.</div>
+            <div class="step"><b>2</b>SFT: create a LoRA and teach the first behavior with train_steps.</div>
+            <div class="step"><b>3</b>RL: collect rollouts, score them, and improve the same resident adapter.</div>
+            <div class="step"><b>4</b>Inference: sample, evaluate, add failures back to data, and repeat.</div>
+          </div>
+          <div class="summary-card">
+            <strong>Use case view</strong>
+            <span class="tiny">Gym is a rollout collector. Resident RL LoRA is the API path that trains an adapter from rewards. NeMo-RL is for launching a separate dedicated RL job. They all belong to the RL/evaluation part of the flywheel.</span>
+          </div>
+          <div class="big-actions">
+            <button class="primary" data-mode-jump="sft">Go To SFT Training</button>
+            <button class="blue" data-mode-jump="rl">Go To RL + Eval</button>
+          </div>
+        </div>
+      </section>
+
+      <section data-panel="sft">
         <div class="section-head">
           <h2>SDK Training Loop</h2>
           <button id="new-workspace">New Clean Workspace</button>
@@ -549,7 +571,7 @@
         </div>
       </section>
 
-      <section class="active-panel" data-panel="sft">
+      <section data-panel="sft">
         <div class="section-head">
           <h2>The Two Jobs</h2>
           <span class="tiny">Atlas and Borealis train on different text.</span>
@@ -581,25 +603,25 @@ Answer:</textarea></label>
 
       <section data-panel="rl">
         <div class="section-head">
-          <h2>RL LoRA</h2>
-          <span class="tiny">Use resident adapters with rollout rewards and RL losses.</span>
+          <h2>RL + Evaluation Toolkit</h2>
+          <span class="tiny">One use case: collect rollouts, score them, then improve or launch RL.</span>
         </div>
         <div class="body">
           <div class="steps">
-            <div class="step active"><b>1</b>Sample policy rollouts with logprobs.</div>
-            <div class="step"><b>2</b>Score completions with a verifier or rule reward.</div>
-            <div class="step"><b>3</b>Build advantages and old-logprob inputs.</div>
-            <div class="step"><b>4</b>Train with importance_sampling, ppo, cispo, or dro.</div>
+            <div class="step active"><b>1</b>Gym / API: collect policy rollouts with token logprobs.</div>
+            <div class="step"><b>2</b>Reward: score completions with rules, verifiers, or evals.</div>
+            <div class="step"><b>3</b>Resident RL LoRA: train this service's adapter with RL loss inputs.</div>
+            <div class="step"><b>4</b>NeMo-RL: launch a dedicated GRPO job when the run should own the GPUs.</div>
           </div>
           <div class="summary-card">
-            <strong>Recommended path</strong>
-            <span class="tiny">Run the checked-in `nemotron_rl_lora` recipe or use the SDK to submit `/train_steps` with RL loss inputs.</span>
+            <strong>Which path do I use?</strong>
+            <span class="tiny">Use resident RL LoRA for the Tinker flywheel on small or mid-size adapters. Use Gym/API to collect rollout data. Use NeMo-RL when you want a separate dedicated RL training job.</span>
           </div>
           <pre class="sample">python examples/tinker_api/run_recipe.py nemotron_rl_lora --base-url http://127.0.0.1:18082</pre>
         </div>
       </section>
 
-      <section data-panel="gym">
+      <section data-panel="rl">
         <div class="section-head">
           <h2>Gym Rollouts</h2>
           <span class="tiny">Collect OpenAI-compatible policy samples for RL training.</span>
@@ -618,7 +640,7 @@ Answer:</textarea></label>
         </div>
       </section>
 
-      <section class="active-panel" data-panel="sft">
+      <section data-panel="sft">
         <div class="section-head">
           <h2>Results</h2>
           <span class="tiny">Sample buttons use the correct prompt automatically.</span>
@@ -640,7 +662,7 @@ Answer:</textarea></label>
         </div>
       </section>
 
-      <section data-panel="nemo">
+      <section data-panel="rl">
         <div class="section-head">
           <h2>NeMo-RL Bridge</h2>
           <span class="tiny">Launch or dry-run GRPO from Nemotron Tinker.</span>
@@ -873,22 +895,19 @@ logger.wandb_enabled=false</textarea></label>
           panel.classList.toggle("active-panel", panel.dataset.panel === mode);
         });
         const notes = {
+          flywheel: "Follow the adapter flywheel: data, SFT, RL improvement, evaluation, inference.",
           sft: "SFT uses the SDK-style createTrainingClient, sftDatum, trainSteps, and sample loop.",
-          rl: "RL LoRA uses policy rollouts with logprobs, reward/advantage data, then trainSteps with an RL loss.",
-          gym: "Gym mode uses the OpenAI-compatible /v1 policy endpoints for rollout collection before RL training.",
-          nemo: "NeMo-RL mode uses the bridge below to dry-run or launch a separate GRPO job.",
+          rl: "RL + Eval combines Gym rollout collection, resident RL LoRA updates, and optional dedicated NeMo-RL jobs.",
         };
         $("mode-note").textContent = notes[mode];
         $("next-action").textContent =
-          mode === "sft"
+          mode === "flywheel"
+            ? "Start with data, then run SFT."
+            : mode === "sft"
             ? "Create two training clients, train, then sample."
-            : mode === "rl"
-              ? "Run the RL LoRA recipe or submit RL train_steps data."
-              : mode === "gym"
-                ? "Collect a rollout from /v1/responses."
-                : "Prepare a dry-run NeMo-RL command first.";
-        if (mode === "nemo") {
-          $("rl-output").textContent = "Use the NeMo-RL Bridge controls below to prepare or launch a job.";
+            : "Collect rollouts, score them, then choose resident RL LoRA or NeMo-RL.";
+        if (mode === "rl") {
+          $("rl-output").textContent = "Use the NeMo-RL controls when you want a dedicated external RL job.";
         }
         render();
       }
@@ -1111,7 +1130,7 @@ logger.wandb_enabled=false</textarea></label>
 
       function showGymConverterCommand() {
         $("gym-output").textContent = [
-          "python examples/tinker_api/gym_rollouts_to_tinker_rl.py \\",
+          "python examples/tinker_api/tools/gym_rollouts_to_tinker_rl.py \\",
           "  --input-jsonl /path/to/gym_rollouts.jsonl \\",
           "  --output-json /tmp/tinker_rl_payload.json \\",
           "  --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \\",
@@ -1271,6 +1290,9 @@ logger.wandb_enabled=false</textarea></label>
       document.querySelectorAll("[data-mode]").forEach((button) => {
         button.onclick = () => setMode(button.dataset.mode);
       });
+      document.querySelectorAll("[data-mode-jump]").forEach((button) => {
+        button.onclick = () => setMode(button.dataset.modeJump);
+      });
       $("gym-sample").onclick = () => handle(collectGymRollout);
       $("gym-copy-note").onclick = showGymConverterCommand;
       $("rl-dry-run").onclick = () => handle(() => submitRlJob(true));
@@ -1279,7 +1301,7 @@ logger.wandb_enabled=false</textarea></label>
       $("rl-logs").onclick = () => handle(showRlLogs);
       $("rl-cancel").onclick = () => handle(cancelRlJob);
 
-      setMode("sft");
+      setMode("flywheel");
       refresh().catch((error) => toast(error.message, true));
       setInterval(() => refresh().catch(() => {}), 5000);
     </script>

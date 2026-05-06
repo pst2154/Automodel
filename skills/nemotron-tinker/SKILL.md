@@ -38,7 +38,12 @@ Nemotron Tinker prototype under `examples/tinker_api/` and
 - `examples/tinker_api/run_mixed_lora_server.py`: service entry point.
 - `examples/tinker_api/run_recipe.py`: named workload dispatcher.
 - `examples/tinker_api/recipes/`: repeatable SFT and RL recipe configs.
-- `examples/tinker_api/async_lora_demo.html`: standalone Nemotron Tinker demo.
+- `examples/tinker_api/clients/`: runnable API and workload clients.
+- `examples/tinker_api/tools/`: converters and benchmark helpers.
+- `examples/tinker_api/demos/async_lora_demo.html`: standalone Nemotron Tinker
+  demo.
+- `examples/tinker_api/prototypes/`: direct smoke prototypes; do not use these
+  as the main path unless explicitly debugging full-model behavior.
 
 ## Implementation Rules
 
@@ -75,7 +80,7 @@ uv run python examples/tinker_api/run_recipe.py nemotron_rl_lora --dry-run
 For the standalone demo, check JavaScript syntax:
 
 ```bash
-node -e 'const fs=require("fs"); const html=fs.readFileSync("examples/tinker_api/async_lora_demo.html","utf8"); const match=html.match(/<script>([\s\S]*)<\/script>/); new Function(match[1]); console.log("demo js syntax ok");'
+node -e 'const fs=require("fs"); const html=fs.readFileSync("examples/tinker_api/demos/async_lora_demo.html","utf8"); const match=html.match(/<script>([\s\S]*)<\/script>/); new Function(match[1]); console.log("demo js syntax ok");'
 ```
 
 Before committing, follow repo rules:
@@ -91,8 +96,9 @@ git diff --check
 - Use `qwen_sft_quick` for fast local API and UI smoke tests.
 - Use `nemotron_sft_large` for full-model SFT validation on the CompLab GPU
   host.
-- Use `nemotron_rl_lora` or `examples/tinker_api/rl_lora_workload_client.py`
-  for resident RL LoRA validation.
+- Use `nemotron_rl_lora` or
+  `examples/tinker_api/clients/rl_lora_workload_client.py` for resident RL
+  LoRA validation.
 - Use `POST /v1/responses` or SDK `sample_openai_response(...)` for Gym-style
   rollout collection.
 - Use `POST /rl/jobs` for separate NeMo-RL launch or dry-run validation.
@@ -104,5 +110,5 @@ git diff --check
 - Put SFT commands and behavior in `docs/sft.md`.
 - Put RL, Gym, and NeMo-RL behavior in `docs/rl.md`.
 - Put SDK examples in `docs/sdk.md`.
-- Update `examples/tinker_api/async_lora_demo.html` when the visible product
-  story changes.
+- Update `examples/tinker_api/demos/async_lora_demo.html` when the visible
+  product story changes.

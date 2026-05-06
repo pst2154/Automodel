@@ -15,8 +15,8 @@
 import pytest
 import torch
 
-from examples.tinker_api.api_smoke_client import Example, build_datum
-from examples.tinker_api.gym_rollouts_to_tinker_rl import convert_rollouts
+from examples.tinker_api.clients.qwen_api_smoke_client import Example, build_datum
+from examples.tinker_api.tools.gym_rollouts_to_tinker_rl import convert_rollouts
 from examples.tinker_api.run_recipe import build_command
 from nemo_automodel.services.tinker_api import client as tinker_client
 from nemo_automodel.services.tinker_api.client import _build_batch

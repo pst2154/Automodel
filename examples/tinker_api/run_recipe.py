@@ -40,11 +40,11 @@ def _append_flag(command: list[str], name: str, value: Any) -> None:
 
 def _script_for_kind(kind: str) -> str:
     if kind == "qwen_sft":
-        return "api_smoke_client.py"
+        return "clients/qwen_api_smoke_client.py"
     if kind == "nemotron_sft":
-        return "nemotron_nano_api_smoke_client.py"
+        return "clients/nemotron_nano_api_smoke_client.py"
     if kind == "nemotron_rl":
-        return "rl_lora_workload_client.py"
+        return "clients/rl_lora_workload_client.py"
     raise ValueError(f"Unsupported recipe kind: {kind}")
 
 

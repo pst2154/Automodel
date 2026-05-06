@@ -643,10 +643,8 @@
       <div class="controls">
         <div class="modebar" aria-label="Demo mode">
           <button class="secondary active" data-mode="flywheel">Flywheel</button>
-          <button class="secondary" data-mode="sft">SFT</button>
-          <button class="secondary" data-mode="rl">RL LoRA</button>
-          <button class="secondary" data-mode="gym">Gym</button>
-          <button class="secondary" data-mode="nemo">NeMo-RL</button>
+          <button class="secondary" data-mode="sft">Train Adapter</button>
+          <button class="secondary" data-mode="rl">RL + Eval</button>
         </div>
         <button id="replay">Run Selected Demo</button>
       </div>
@@ -990,138 +988,6 @@
             },
           },
         },
-        gym: {
-          inputTitle: "NeMo Gym",
-          inputTag: "OpenAI",
-          apiTitle: "Policy Endpoint",
-          apiTag: "/v1",
-          workerTitle: "Rollout Service",
-          workerTag: "logprobs",
-          outputTitle: "RL Payloads",
-          outputTag: "JSONL",
-          gpuTitle: "Tinker Policy",
-          gpuSubtitle: "OpenAI-compatible sampling with traces",
-          uploadsLabel: "gym batches",
-          activeLabel: "collectors",
-          readyLabel: "payloads ready",
-          samplesTitle: "Converted Gym Outputs",
-          readyCaption: "Run the Gym demo to watch OpenAI-style rollout calls become Tinker RL train payloads.",
-          apiSteps: [
-            ["responses.create", "Gym calls /v1/responses with a resident run name."],
-            ["Return traces", "tinker_return_logprobs includes tokens and generated logprobs."],
-            ["Verifier reward", "Gym attaches reward and metadata."],
-            ["Payload convert", "gym_rollouts_to_tinker_rl.py builds /train_steps data."],
-          ],
-          events: [
-            ["Gym batch A", "Prompts route to one resident LoRA policy."],
-            ["Trace response", "The service returns output text plus RL token traces."],
-            ["Converter starts", "Rollouts become target tokens, weights, and advantages."],
-            ["Gym batch B joins", "Another collector can target a different resident adapter."],
-            ["Eval batch joins", "Late evaluation data is converted the same way."],
-            ["Payloads ready", "Converted payloads can be submitted to RL train_steps."],
-          ],
-          items: {
-            atlas: {
-              title: "gym_math_prompts.jsonl",
-              tenant: "gym-a",
-              meta: ["OpenAI /v1", "logprobs", "reward=rule", "run=math"],
-              adapter: "Math Payload",
-              adapterMeta: ["MATH", "advantages"],
-              job: "collect_math",
-              uploadCaption: ["Gym Calls", "Gym sends OpenAI-compatible policy calls with tinker_return_logprobs enabled."],
-              trainCaption: "The rollout collector gathers tokens, logprobs, and verifier scores.",
-              sample: "Payload: 96 target tokens, old logprobs, weights, and centered advantages.",
-            },
-            borealis: {
-              title: "gym_route_prompts.jsonl",
-              tenant: "gym-b",
-              meta: ["chat/completions", "2 samples", "reward=verifier", "run=route"],
-              adapter: "Route Payload",
-              adapterMeta: ["ROUTE", "train_steps"],
-              job: "collect_route",
-              uploadCaption: ["Second Collector", "A separate Gym collector targets another adapter while the first is active."],
-              trainCaption: "The converter writes a separate train payload for this resident run.",
-              sample: "Payload: route rollouts are ready for importance_sampling train_steps.",
-            },
-            comet: {
-              title: "gym_eval_rollouts.jsonl",
-              tenant: "gym-eval",
-              meta: ["eval prompts", "no update", "metrics", "late"],
-              adapter: "Eval Report",
-              adapterMeta: ["EVAL", "metrics"],
-              job: "collect_eval",
-              uploadCaption: ["Evaluation", "Late eval rollouts can be collected without changing the serving policy."],
-              trainCaption: "Evaluation traces are stored separately from trainable rollout payloads.",
-              sample: "Report: reward mean 0.71, pass rate 68%, average output 14 tokens.",
-            },
-          },
-        },
-        nemo: {
-          inputTitle: "NeMo-RL Jobs",
-          inputTag: "Hydra",
-          apiTitle: "RL Job Bridge",
-          apiTag: "/rl/jobs",
-          workerTitle: "Launcher",
-          workerTag: "container",
-          outputTitle: "Job Records",
-          outputTag: "logs",
-          gpuTitle: "NeMo-RL",
-          gpuSubtitle: "dedicated GRPO or LoRA job launch",
-          uploadsLabel: "job specs",
-          activeLabel: "launched jobs",
-          readyLabel: "records done",
-          samplesTitle: "Launch Results",
-          readyCaption: "Run the NeMo-RL demo to watch Tinker submit dry-run or real GRPO jobs to the NeMo-RL container.",
-          apiSteps: [
-            ["Validate topology", "TP, PP, CP, and EP overrides are checked."],
-            ["Build command", "Hydra overrides and Docker mounts are assembled."],
-            ["Launch or dry-run", "The bridge records pid, command, logs, and status."],
-            ["Poll logs", "Operators inspect /rl/jobs/{id}/logs or cancel the job."],
-          ],
-          events: [
-            ["GRPO dry-run", "The first job checks command construction safely."],
-            ["Topology check", "Single-node GPU topology is validated."],
-            ["Container launch", "The bridge starts or records the NeMo-RL run."],
-            ["LoRA GRPO joins", "A LoRA-enabled recipe can be submitted next."],
-            ["EP check joins", "A later job tests MoE expert-parallel overrides."],
-            ["Records complete", "Statuses and logs are available through the API."],
-          ],
-          items: {
-            atlas: {
-              title: "grpo_dry_run.yaml",
-              tenant: "rlops-a",
-              meta: ["dry_run=true", "TP=1", "PP=1", "2 steps"],
-              adapter: "Dry-Run Record",
-              adapterMeta: ["DRY", "command"],
-              job: "rljob_dryrun",
-              uploadCaption: ["Job Spec", "The bridge receives a NeMo-RL GRPO job spec and validates it before launch."],
-              trainCaption: "The bridge builds the Docker command and stores it as a durable job record.",
-              sample: "Record: command built, overrides validated, no GPU process launched.",
-            },
-            borealis: {
-              title: "lora_grpo.yaml",
-              tenant: "rlops-b",
-              meta: ["LoRA dim 8", "GRPO", "async", "logs"],
-              adapter: "LoRA GRPO Job",
-              adapterMeta: ["GRPO", "running"],
-              job: "rljob_lora",
-              uploadCaption: ["Real Launch", "A LoRA-enabled GRPO job can launch while prior records remain queryable."],
-              trainCaption: "The launcher records pid, stdout, stderr, timeout, and cancellation state.",
-              sample: "Record: running with policy.dtensor_cfg.lora_cfg.enabled=true.",
-            },
-            comet: {
-              title: "moe_ep_check.yaml",
-              tenant: "rlops-c",
-              meta: ["EP=2", "TP=2", "single node", "dry-run"],
-              adapter: "EP Check",
-              adapterMeta: ["EP", "validated"],
-              job: "rljob_ep",
-              uploadCaption: ["Topology", "A later dry-run checks MoE expert-parallel overrides for a single node."],
-              trainCaption: "The bridge rejects invalid topology before any container launch.",
-              sample: "Record: TP * PP * CP * EP fits the available single-node GPU count.",
-            },
-          },
-        },
       };
 
       function delay(ms) {
@@ -1284,15 +1150,15 @@
         const job = $(`job-${name}`);
         const adapter = $(`adapter-${name}`);
         job.className = "queue-card live";
-        job.querySelector(".tag").textContent = activeMode === "gym" ? "collecting" : activeMode === "nemo" ? "launching" : "training";
+        job.querySelector(".tag").textContent = "training";
         kpi("kpi-active", String(Number($("kpi-active").textContent) + 1));
-        setCaption(activeMode === "gym" ? "Collecting" : activeMode === "nemo" ? "Launching" : "Training", item.trainCaption);
+        setCaption("Training", item.trainCaption);
         for (let pct = 0; pct <= 100; pct += 5) {
           job.querySelector(".fill").style.width = `${pct}%`;
           await delay(duration / 20);
         }
         job.className = "queue-card done";
-        job.querySelector(".tag").textContent = activeMode === "nemo" ? "recorded" : "complete";
+        job.querySelector(".tag").textContent = "complete";
         adapter.className = "adapter done";
         adapter.querySelector(".tag").textContent = "ready";
         kpi("kpi-active", String(Math.max(0, Number($("kpi-active").textContent) - 1)));

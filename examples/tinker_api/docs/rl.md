@@ -44,7 +44,7 @@ python examples/tinker_api/run_recipe.py nemotron_rl_lora \
 Equivalent direct client:
 
 ```bash
-python examples/tinker_api/rl_lora_workload_client.py \
+python examples/tinker_api/clients/rl_lora_workload_client.py \
   --base-url http://127.0.0.1:18082 \
   --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
   --cache-dir /home/scratch.asteiner/hf \
@@ -99,7 +99,7 @@ policy_model_name: rl-concise
 Convert Gym rollout JSONL into a Tinker RL payload:
 
 ```bash
-python examples/tinker_api/gym_rollouts_to_tinker_rl.py \
+python examples/tinker_api/tools/gym_rollouts_to_tinker_rl.py \
   --input-jsonl /path/to/gym_rollouts.jsonl \
   --output-json /tmp/tinker_rl_payload.json \
   --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
