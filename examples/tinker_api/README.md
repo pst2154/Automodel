@@ -19,6 +19,20 @@ adapters over one resident base model. The main path is the mixed-LoRA HTTP
 service and `MixedLoraServiceClient`; older `ServiceClient` examples are legacy
 sanity checks and should not drive new work.
 
+## Topic Docs
+
+- [Architecture](docs/architecture.md): service shape, worker model, storage,
+  distributed scope, and kernel scope.
+- [SFT Workflows](docs/sft.md): cross-entropy LoRA training, recipes,
+  validated workloads, and sampling expectations.
+- [RL LoRA Workflows](docs/rl.md): rollout collection, RL losses, NeMo Gym
+  bridge, and NeMo-RL bridge boundaries.
+- [Python SDK](docs/sdk.md): client objects, server-owned training, sampling,
+  OpenAI/Gym calls, and recipes.
+
+The rest of this README is the detailed runbook and validation log for the
+current experimental branch.
+
 ## Current Status
 
 What works now:
