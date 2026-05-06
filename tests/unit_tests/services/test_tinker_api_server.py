@@ -78,6 +78,7 @@ class FakeMixedLoraServiceClient:
         return FakeTrainingClient(self, adapter_id, step=self.steps[adapter_id])
 
     def forward_backward_mixed(self, batches_by_adapter, loss_fn, loss_fn_config=None, zero_grad=True):
+        loss_fn_config = loss_fn_config or {}
         self.forward_batches.append(
             {
                 "sizes": {adapter_id: len(batch) for adapter_id, batch in batches_by_adapter.items()},
@@ -86,14 +87,23 @@ class FakeMixedLoraServiceClient:
         )
         outputs = {}
         for adapter_id, batch in batches_by_adapter.items():
+            metrics = {
+                "loss": float(len(batch)),
+                "loss:sum": float(len(batch)),
+                "loss_weight_mean": 1.0,
+                "num_label_tokens": float(len(batch) * 3),
+            }
+            if loss_fn != "cross_entropy":
+                metrics.update(
+                    {
+                        "clip_low_threshold": float(loss_fn_config.get("clip_low_threshold", 0.8)),
+                        "clip_high_threshold": float(loss_fn_config.get("clip_high_threshold", 1.2)),
+                        "importance_ratio_mean": 1.0,
+                    }
+                )
             outputs[adapter_id] = ForwardBackwardOutput(
                 loss=float(len(batch)),
-                metrics={
-                    "loss": float(len(batch)),
-                    "loss:sum": float(len(batch)),
-                    "loss_weight_mean": 1.0,
-                    "num_label_tokens": float(len(batch) * 3),
-                },
+                metrics=metrics,
                 loss_fn_outputs=[{"logprobs": [-1.0, -0.5]}],
             )
         return APIFuture(outputs)
@@ -1041,6 +1051,38 @@ def test_mixed_lora_server_microbatches_train_steps(monkeypatch, tmp_path):
         {"sizes": {"adapter_1": 2}, "zero_grad": False},
         {"sizes": {"adapter_1": 1}, "zero_grad": False},
     ]
+
+
+def test_mixed_lora_server_preserves_rl_config_metrics_across_microbatches(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "MixedLoraServiceClient", FakeMixedLoraServiceClient)
+    app = server.create_app(base_model="fake-model", scratch_dir=tmp_path)
+    client = fastapi_testclient.TestClient(app)
+    first = client.post("/runs", json={"name": "atlas"}).json()
+
+    response = client.post(
+        "/train_steps",
+        json={
+            "batches": {
+                first["run_id"]: [
+                    {
+                        "model_input": {"tokens": [idx, idx + 1]},
+                        "loss_fn_inputs": {"logprobs": [0.0], "advantages": [1.0]},
+                    }
+                    for idx in range(5)
+                ],
+            },
+            "steps": 1,
+            "learning_rate": 0.001,
+            "microbatch_size": 2,
+            "loss_fn": "importance_sampling",
+            "loss_fn_config": {"clip_low_threshold": 0.8, "clip_high_threshold": 1.2},
+        },
+    ).json()
+
+    metrics = response["runs"][first["run_id"]]["last_metrics"]
+    assert metrics["clip_low_threshold"] == 0.8
+    assert metrics["clip_high_threshold"] == 1.2
+    assert metrics["importance_ratio_mean"] == 1.0
 
 
 def test_mixed_lora_server_submits_async_train_job(monkeypatch, tmp_path):

@@ -625,11 +625,10 @@ class MixedLoraServiceClient:
         outputs_by_adapter = {}
         gathered = None
         if loss_fn != "cross_entropy":
-            with torch.no_grad():
-                target_logprobs = F.log_softmax(shift_logits, dim=-1)
-                safe_labels = shift_labels.clamp_min(0).unsqueeze(-1)
-                gathered = target_logprobs.gather(-1, safe_labels).squeeze(-1)
-                gathered = gathered.masked_fill(~token_mask, 0.0)
+            target_logprobs = F.log_softmax(shift_logits, dim=-1)
+            safe_labels = shift_labels.clamp_min(0).unsqueeze(-1)
+            gathered = target_logprobs.gather(-1, safe_labels).squeeze(-1)
+            gathered = gathered.masked_fill(~token_mask, 0.0)
 
         for adapter_id, start, end in ranges:
             adapter_loss, adapter_mask, loss_metrics = _rl_token_loss(

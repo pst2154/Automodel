@@ -1782,7 +1782,9 @@ def create_app(
                     if key in {"loss", "loss:sum", "loss:mean", "num_label_tokens", "loss_fn"}:
                         continue
                     if isinstance(value, (int, float)):
-                        if key == "loss_weight_mean" or key.endswith("_mean") or key.endswith(":mean"):
+                        if key in {"clip_low_threshold", "clip_high_threshold", "beta"}:
+                            current["metrics"][key] = float(value)
+                        elif key == "loss_weight_mean" or key.endswith("_mean") or key.endswith(":mean"):
                             current["weighted_metric_sums"][key] = current["weighted_metric_sums"].get(key, 0.0) + (
                                 float(value) * num_label_tokens
                             )

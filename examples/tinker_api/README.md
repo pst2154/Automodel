@@ -277,6 +277,29 @@ OpenAI endpoint supplies token/logprob traces, and the converter builds
 implement production GRPO/PPO advantage estimation, KL/reference-model control,
 or tool-call output training.
 
+For a direct service-level RL LoRA exercise, collect rollouts from the resident
+policy and train two adapters with:
+
+```bash
+python examples/tinker_api/rl_lora_workload_client.py \
+  --base-url http://127.0.0.1:18082 \
+  --base-model /home/scratch.asteiner/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
+  --cache-dir /home/scratch.asteiner/hf \
+  --steps 12 \
+  --learning-rate 2e-5 \
+  --microbatch-size 4 \
+  --rollouts-per-prompt 2 \
+  --max-new-tokens 12 \
+  --loss-fn importance_sampling \
+  --tenant-id nemotron-rl-lora-v1 \
+  --save-prefix nemotron-rl-lora-v1
+```
+
+This creates `rl-concise` and `rl-numeric`, samples policy trajectories with
+token/logprob traces, computes simple scalar rewards, converts rewards to
+advantages, and submits one mixed `/train_steps` job with `loss_fn:
+importance_sampling`.
+
 ### NeMo-RL Bridge
 
 The bridge is intentionally small. It launches a NeMo-RL recipe from a known
@@ -674,6 +697,20 @@ tile.
   `30 passed` with `uv run python -m pytest tests/unit_tests/services/test_tinker_api_server.py -q`.
 - Full Nemotron HTTP large-workload async train/inference/save validation:
   passed.
+- Full Nemotron RL LoRA rollout/train/save validation: passed on
+  `2026-05-06`.
+  - Current-code service on `alon-ts1-iec-16`, port `18082`, scratch
+    `/home/scratch.asteiner/nvidia_tinker_rl_lora_v2`.
+  - Two adapters: `rl-concise` and `rl-numeric`.
+  - 16 sampled rollout datums, `importance_sampling`, 12 optimizer steps,
+    `microbatch_size=4`.
+  - Concise loss `-0.4535 -> -0.5324`; numeric loss `0.0336 -> -0.2577`.
+  - Saved checkpoints:
+    `/home/scratch.asteiner/nvidia_tinker_rl_lora_v2/checkpoints/nemotron-rl-lora-v1-concise-importance_sampling`
+    and
+    `/home/scratch.asteiner/nvidia_tinker_rl_lora_v2/checkpoints/nemotron-rl-lora-v1-numeric-importance_sampling`.
+  - This run exposed and fixed an RL-only gradient bug: current-policy
+    logprobs must be gathered with gradients enabled.
 - File-backed `/train_steps` request manifest resume tests: passed.
 - Sampling fast-path and manual fallback tests: passed.
 - OpenAI-compatible NeMo Gym bridge endpoint tests: passed.
@@ -686,7 +723,7 @@ tile.
 - Local `ruff` and `py_compile`: passed.
 - Focused SFT tokenization regressions: `2 passed`.
 - Broader local Tinker service suite after explicit CUDA skips:
-  `59 passed, 3 skipped`.
+  `61 passed, 3 skipped`.
 
 Local laptop pytest is not reliable because the local environment has a
 `tokenizers`/`transformers` version mismatch. Use the container for meaningful

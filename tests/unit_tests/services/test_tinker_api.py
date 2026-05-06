@@ -22,6 +22,7 @@ from nemo_automodel.services.tinker_api.client import _build_batch
 from nemo_automodel.services.tinker_api.future import APIFuture
 from nemo_automodel.services.tinker_api.grouped_lora_kernel import grouped_lora_da_db_wrapper
 from nemo_automodel.services.tinker_api.mixed_client import (
+    MixedAdapterHandle,
     MixedAdapterLinearLoRA,
     MixedLoraServiceClient,
     _rl_token_loss,
@@ -80,11 +81,32 @@ class _GenerateModel:
         return type("Output", (), {"logits": logits})
 
 
+class _TinyTrainableLogitModel(torch.nn.Module):
+    def __init__(self, vocab_size=8):
+        super().__init__()
+        self.logits = torch.nn.Parameter(torch.zeros(vocab_size))
+
+    def forward(self, input_ids, attention_mask=None):
+        batch_size, sequence_length = input_ids.shape
+        logits = self.logits.view(1, 1, -1).expand(batch_size, sequence_length, -1)
+        return type("Output", (), {"logits": logits})
+
+
 def _sampling_service(model):
     service = MixedLoraServiceClient.__new__(MixedLoraServiceClient)
     service.model = model
     service.tokenizer = _FakeSamplingTokenizer()
     service.device = torch.device("cpu")
+    service.mixed_lora_layers = {}
+    return service
+
+
+def _training_service(model):
+    service = MixedLoraServiceClient.__new__(MixedLoraServiceClient)
+    service.model = model
+    service.tokenizer = type("Tokenizer", (), {"pad_token_id": 0})()
+    service.device = torch.device("cpu")
+    service.adapters = {"adapter": MixedAdapterHandle(adapter_id="adapter")}
     service.mixed_lora_layers = {}
     return service
 
@@ -173,6 +195,28 @@ def test_rl_token_loss_modes_return_finite_weighted_loss(loss_fn):
     assert effective_mask.tolist() == [[True, True], [True, False]]
     assert metrics["loss_weight_mean"] == 1.0
     assert torch.allclose(token_loss, expected)
+
+
+def test_mixed_lora_rl_forward_backward_keeps_logprob_gradient():
+    model = _TinyTrainableLogitModel()
+    service = _training_service(model)
+    data = [
+        Datum(
+            model_input=ModelInput.from_ints([1, 2, 3]),
+            loss_fn_inputs={
+                "target_tokens": ModelInput.from_ints([2, 3, 4]),
+                "weights": [1.0, 1.0, 1.0],
+                "advantages": [1.0, -0.5, 0.25],
+                "logprobs": [0.0, 0.0, 0.0],
+            },
+        )
+    ]
+
+    output = service.forward_backward_mixed({"adapter": data}, loss_fn="importance_sampling").result()
+
+    assert output["adapter"].metrics["loss_fn"] == "importance_sampling"
+    assert model.logits.grad is not None
+    assert torch.isfinite(model.logits.grad).all()
 
 
 def test_mixed_lora_layer_routes_ranges_with_torch_fallback():
