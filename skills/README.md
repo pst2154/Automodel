@@ -26,3 +26,4 @@ claude --add-dir skills
 | `parity-testing` | Verify numerical correctness against references |
 | `distributed-training` | FSDP2, HSDP, pipeline/context parallelism |
 | `launcher-config` | Slurm and SkyPilot job submission |
+| `nemotron-tinker` | Tinker-like mixed-LoRA API, SFT/RL recipes, SDK, UI, and demo |
