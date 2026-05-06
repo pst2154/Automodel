@@ -37,6 +37,8 @@ What works now:
 - Server-owned train jobs store large tokenized requests as file-backed
   manifests under `$SCRATCH/tinker_api/train_requests/` so `/jobs` metadata
   stays compact and restart-resumable.
+- `/jobs` returns compact summaries for UI/listing use; fetch `/jobs/{job_id}`
+  for full result details.
 - Idempotency keys for retryable mutating endpoints.
 - Basic bearer-token auth, `X-Tinker-Tenant-Id` request scoping, per-tenant run
   caps, and per-tenant rate limits.

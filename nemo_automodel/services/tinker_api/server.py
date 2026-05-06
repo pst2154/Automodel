@@ -218,6 +218,22 @@ class JobRecord(BaseModel):
     updated_at: str
 
 
+class JobSummary(BaseModel):
+    """Compact queued operation metadata for list views."""
+
+    job_id: str
+    kind: str
+    status: str
+    tenant_id: Optional[str] = None
+    sequence: int = 0
+    run_ids: list[str] = Field(default_factory=list)
+    progress: dict[str, Any] = Field(default_factory=dict)
+    has_result: bool = False
+    error: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
 class RLJobRequest(BaseModel):
     """Launch request for a NeMo-RL recipe."""
 
@@ -1407,6 +1423,27 @@ def create_app(
             job_store.save(jobs)
             return job
 
+    def compact_job_summary(job: JobRecord) -> JobSummary:
+        progress = dict(job.progress)
+        progress.pop("request", None)
+        if isinstance(progress.get("request_ref"), dict):
+            request_ref = dict(progress["request_ref"])
+            request_ref.pop("sha256", None)
+            progress["request_ref"] = request_ref
+        return JobSummary(
+            job_id=job.job_id,
+            kind=job.kind,
+            status=job.status,
+            tenant_id=job.tenant_id,
+            sequence=job.sequence,
+            run_ids=list(job.run_ids),
+            progress=progress,
+            has_result=job.result is not None,
+            error=job.error,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
+        )
+
     def fail_job(job_id: str, exc: Exception) -> None:
         mark_job(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
 
@@ -1901,10 +1938,12 @@ def create_app(
     def get_run_record(run_id: str, http_request: Request) -> RunRecord:
         return get_authorized_record(run_id, http_request)
 
-    @app.get("/jobs", response_model=list[JobRecord])
-    def list_jobs(http_request: Request) -> list[JobRecord]:
+    @app.get("/jobs", response_model=list[JobSummary])
+    def list_jobs(http_request: Request) -> list[JobSummary]:
         with jobs_lock:
-            return [job for job in jobs.values() if visible_to_request(job.tenant_id, http_request)]
+            return [
+                compact_job_summary(job) for job in jobs.values() if visible_to_request(job.tenant_id, http_request)
+            ]
 
     @app.get("/jobs/{job_id}", response_model=JobRecord)
     def get_job(job_id: str, http_request: Request) -> JobRecord:

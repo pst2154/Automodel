@@ -945,6 +945,11 @@ def test_mixed_lora_server_runs_server_owned_train_steps(monkeypatch, tmp_path):
 
     jobs = client.get("/jobs").json()
     assert jobs[0]["kind"] == "train_steps"
+    assert jobs[0]["has_result"] is True
+    assert "result" not in jobs[0]
+    assert "request" not in jobs[0]["progress"]
+    assert "sha256" not in jobs[0]["progress"]["request_ref"]
+    assert client.get(f"/jobs/{jobs[0]['job_id']}").json()["result"]["last_losses"][first["run_id"]] == 1.0
 
 
 def test_mixed_lora_server_microbatches_train_steps(monkeypatch, tmp_path):
