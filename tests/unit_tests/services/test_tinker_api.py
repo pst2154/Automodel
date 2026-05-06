@@ -25,7 +25,7 @@ from nemo_automodel.services.tinker_api.mixed_client import (
     MixedLoraServiceClient,
     _rl_token_loss,
 )
-from nemo_automodel.services.tinker_api.types import Datum, ModelInput
+from nemo_automodel.services.tinker_api.types import Datum, ModelInput, SamplingParams
 
 
 class _FakeTokenizer:
@@ -34,6 +34,58 @@ class _FakeTokenizer:
         if add_special_tokens:
             return [1] + tokens
         return tokens
+
+
+class _FakeBatch(dict):
+    def to(self, device):
+        return _FakeBatch({key: value.to(device) for key, value in self.items()})
+
+
+class _FakeSamplingTokenizer:
+    pad_token_id = 0
+    eos_token_id = 9
+
+    def __call__(self, prompt, return_tensors=None):
+        return _FakeBatch(
+            {
+                "input_ids": torch.tensor([[1, 2]], dtype=torch.long),
+                "attention_mask": torch.tensor([[1, 1]], dtype=torch.long),
+            }
+        )
+
+    def decode(self, output_ids, skip_special_tokens=True):
+        return ",".join(str(token) for token in output_ids.tolist())
+
+
+class _GenerateModel:
+    def __init__(self, *, fail_generate=False):
+        self.fail_generate = fail_generate
+        self.generate_calls = 0
+        self.forward_calls = 0
+
+    def eval(self):
+        return self
+
+    def generate(self, **kwargs):
+        self.generate_calls += 1
+        if self.fail_generate:
+            raise RuntimeError("generate unavailable")
+        return torch.tensor([[1, 2, 7, 8]], dtype=torch.long)
+
+    def __call__(self, input_ids, attention_mask=None):
+        self.forward_calls += 1
+        logits = torch.zeros(input_ids.shape[0], input_ids.shape[1], 10)
+        logits[:, -1, 6] = 1.0
+        return type("Output", (), {"logits": logits})
+
+
+def _sampling_service(model):
+    service = MixedLoraServiceClient.__new__(MixedLoraServiceClient)
+    service.model = model
+    service.tokenizer = _FakeSamplingTokenizer()
+    service.device = torch.device("cpu")
+    service.mixed_lora_layers = {}
+    return service
 
 
 def test_api_future_returns_value():
@@ -139,6 +191,29 @@ def test_mixed_lora_layer_routes_ranges_with_torch_fallback():
     assert not layer._can_use_triton_lora(torch.zeros(1, 3))
     assert base.weight.requires_grad is False
     assert torch.allclose(out, torch.tensor([[12.0, 3.0], [7.0, 59.0]]))
+
+
+def test_mixed_lora_sample_prefers_generate_fast_path():
+    model = _GenerateModel()
+    service = _sampling_service(model)
+
+    output = service.sample("adapter", "prompt", SamplingParams(max_new_tokens=2, do_sample=False)).result()
+
+    assert model.generate_calls == 1
+    assert model.forward_calls == 0
+    assert output.tokens == [1, 2, 7, 8]
+    assert output.text == "1,2,7,8"
+
+
+def test_mixed_lora_sample_falls_back_to_manual_loop_when_generate_fails():
+    model = _GenerateModel(fail_generate=True)
+    service = _sampling_service(model)
+
+    output = service.sample("adapter", "prompt", SamplingParams(max_new_tokens=2, do_sample=False)).result()
+
+    assert model.generate_calls == 1
+    assert model.forward_calls == 2
+    assert output.tokens == [1, 2, 6, 6]
 
 
 def test_mixed_lora_layer_grouped_backend_matches_loop_forward_backward():

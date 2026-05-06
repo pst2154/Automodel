@@ -566,6 +566,7 @@ tile.
 - Full Nemotron HTTP large-workload async train/inference/save validation:
   passed.
 - File-backed `/train_steps` request manifest resume tests: passed.
+- Sampling fast-path and manual fallback tests: passed.
 - Nemotron direct mixed-LoRA validation: passed.
 - Nemotron HTTP mixed-LoRA train/inference/save validation: passed.
 - Nemotron HTTP restart restore validation: passed.
@@ -574,7 +575,7 @@ tile.
 - Local `ruff` and `py_compile`: passed.
 - Focused SFT tokenization regressions: `2 passed`.
 - Broader local Tinker service suite after explicit CUDA skips:
-  `54 passed, 3 skipped`.
+  `56 passed, 3 skipped`.
 
 Local laptop pytest is not reliable because the local environment has a
 `tokenizers`/`transformers` version mismatch. Use the container for meaningful
@@ -593,10 +594,10 @@ test results.
    `--resume-interrupted-jobs-on-startup`, and confirm it resumes from
    the file-backed request manifest instead of starting over.
 
-3. **Improve inference performance without compiling.**
-   Keep the manual sampling fallback, but prefer `generate()` when a model
-   supports it. For Nemotron, investigate whether passing explicit
-   `cache_position` is enough to re-enable cached generation safely.
+3. **Validate generated sampling on full Nemotron.**
+   The sampler now prefers `generate()` and falls back to the manual loop if
+   remote-code generation fails. Re-run a restored Nemotron adapter sample and
+   record whether the fast path works for this checkpoint/container pair.
 
 4. **Decide the production scale track.**
    AutoModel is now viable for a single-node API/control-plane prototype. For

@@ -19,7 +19,7 @@ import pathlib
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 import torch
 import torch.nn as nn
@@ -729,6 +729,48 @@ class MixedLoraServiceClient:
             torch.cuda.empty_cache()
         return APIFuture(DetachAdapterResponse(adapter_id=adapter_id, remaining_adapters=len(self.adapters)))
 
+    def _sample_with_generate(self, encoded: Any, params: SamplingParams) -> torch.Tensor:
+        generate_kwargs = {
+            "input_ids": encoded["input_ids"],
+            "max_new_tokens": params.max_new_tokens,
+            "do_sample": params.do_sample,
+            "temperature": max(params.temperature, 1e-6),
+            "top_p": params.top_p,
+        }
+        if "attention_mask" in encoded:
+            generate_kwargs["attention_mask"] = encoded["attention_mask"]
+        if self.tokenizer.pad_token_id is not None:
+            generate_kwargs["pad_token_id"] = self.tokenizer.pad_token_id
+        if self.tokenizer.eos_token_id is not None:
+            generate_kwargs["eos_token_id"] = self.tokenizer.eos_token_id
+        return self.model.generate(**generate_kwargs)
+
+    def _sample_with_manual_loop(self, encoded: Any, params: SamplingParams) -> torch.Tensor:
+        output_ids = encoded["input_ids"]
+        attention_mask = encoded.get("attention_mask")
+        for _ in range(params.max_new_tokens):
+            outputs = self.model(input_ids=output_ids, attention_mask=attention_mask)
+            next_token_logits = outputs.logits[:, -1, :]
+            if params.do_sample:
+                temperature = max(params.temperature, 1e-6)
+                probs = torch.softmax(next_token_logits / temperature, dim=-1)
+                if params.top_p < 1.0:
+                    sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+                    cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                    sorted_mask = cumulative_probs > params.top_p
+                    sorted_mask[..., 1:] = sorted_mask[..., :-1].clone()
+                    sorted_mask[..., 0] = False
+                    sorted_probs = sorted_probs.masked_fill(sorted_mask, 0.0)
+                    probs = torch.zeros_like(probs).scatter(-1, sorted_indices, sorted_probs)
+                    probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                next_token = torch.multinomial(probs, num_samples=1)
+            else:
+                next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+            output_ids = torch.cat([output_ids, next_token], dim=-1)
+            if attention_mask is not None:
+                attention_mask = torch.cat([attention_mask, torch.ones_like(next_token)], dim=-1)
+        return output_ids
+
     def sample(
         self, adapter_id: str, prompt: str, params: Optional[SamplingParams] = None
     ) -> APIFuture[SampleResponse]:
@@ -738,30 +780,11 @@ class MixedLoraServiceClient:
         self._set_active_ranges([(adapter_id, 0, 1)])
         try:
             self.model.eval()
-            output_ids = encoded["input_ids"]
-            attention_mask = encoded.get("attention_mask")
             with torch.no_grad():
-                for _ in range(params.max_new_tokens):
-                    outputs = self.model(input_ids=output_ids, attention_mask=attention_mask)
-                    next_token_logits = outputs.logits[:, -1, :]
-                    if params.do_sample:
-                        temperature = max(params.temperature, 1e-6)
-                        probs = torch.softmax(next_token_logits / temperature, dim=-1)
-                        if params.top_p < 1.0:
-                            sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
-                            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
-                            sorted_mask = cumulative_probs > params.top_p
-                            sorted_mask[..., 1:] = sorted_mask[..., :-1].clone()
-                            sorted_mask[..., 0] = False
-                            sorted_probs = sorted_probs.masked_fill(sorted_mask, 0.0)
-                            probs = torch.zeros_like(probs).scatter(-1, sorted_indices, sorted_probs)
-                            probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-                        next_token = torch.multinomial(probs, num_samples=1)
-                    else:
-                        next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
-                    output_ids = torch.cat([output_ids, next_token], dim=-1)
-                    if attention_mask is not None:
-                        attention_mask = torch.cat([attention_mask, torch.ones_like(next_token)], dim=-1)
+                try:
+                    output_ids = self._sample_with_generate(encoded, params)
+                except Exception:
+                    output_ids = self._sample_with_manual_loop(encoded, params)
             output_ids = output_ids[0]
         finally:
             self._set_active_ranges([])
