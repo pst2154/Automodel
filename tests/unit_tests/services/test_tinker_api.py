@@ -17,6 +17,7 @@ import torch
 
 from examples.tinker_api.api_smoke_client import Example, build_datum
 from examples.tinker_api.gym_rollouts_to_tinker_rl import convert_rollouts
+from examples.tinker_api.run_recipe import build_command
 from nemo_automodel.services.tinker_api import client as tinker_client
 from nemo_automodel.services.tinker_api.client import _build_batch
 from nemo_automodel.services.tinker_api.future import APIFuture
@@ -27,6 +28,7 @@ from nemo_automodel.services.tinker_api.mixed_client import (
     MixedLoraServiceClient,
     _rl_token_loss,
 )
+from nemo_automodel.services.tinker_api.sdk import NemotronTinkerClient, TinkerAPIError
 from nemo_automodel.services.tinker_api.types import Datum, ModelInput, SamplingParams
 
 
@@ -113,6 +115,120 @@ def _training_service(model):
 
 def test_api_future_returns_value():
     assert APIFuture(7).result() == 7
+
+
+def test_sdk_training_client_wraps_core_run_methods():
+    calls = []
+    responses = {
+        ("POST", "/runs"): {
+            "run_id": "run_1",
+            "adapter_id": "adapter_1",
+            "name": "atlas",
+            "status": "created",
+            "sequence": 0,
+        },
+        ("POST", "/runs/run_1/forward_backward"): {
+            "run": {
+                "run_id": "run_1",
+                "adapter_id": "adapter_1",
+                "name": "atlas",
+                "status": "ready",
+                "created_at": "now",
+                "updated_at": "now",
+            },
+            "output": {"loss": 1.5, "metrics": {"loss_fn": "cross_entropy"}, "loss_fn_outputs": []},
+        },
+        ("POST", "/runs/run_1/optim_step"): {
+            "run": {
+                "run_id": "run_1",
+                "adapter_id": "adapter_1",
+                "name": "atlas",
+                "status": "ready",
+                "created_at": "now",
+                "updated_at": "now",
+            },
+            "output": {"step": 1, "learning_rate": 0.001},
+        },
+        ("POST", "/runs/run_1/sample"): {
+            "run": {
+                "run_id": "run_1",
+                "adapter_id": "adapter_1",
+                "name": "atlas",
+                "status": "ready",
+                "created_at": "now",
+                "updated_at": "now",
+            },
+            "output": {"tokens": [1, 2, 3], "text": "ok", "prompt_token_count": 2, "generated_logprobs": [-0.1]},
+        },
+    }
+    sdk = NemotronTinkerClient(base_url="http://unused", tenant_id="tenant-a")
+
+    def fake_request(method, path, payload=None):
+        calls.append((method, path, payload))
+        try:
+            return responses[(method, path)]
+        except KeyError as exc:
+            raise TinkerAPIError((method, path)) from exc
+
+    sdk._request = fake_request
+    training = sdk.create_lora_training_client(name="atlas")
+    datum = Datum(
+        model_input=ModelInput.from_ints([1, 2]),
+        loss_fn_inputs={"target_tokens": ModelInput.from_ints([2, 3]), "weights": [1.0, 1.0]},
+    )
+
+    fb = training.forward_backward([datum]).result()
+    step = training.optim_step(0.001).result()
+    sample = training.sample("hello", return_logprobs=True).result()
+
+    assert training.run_id == "run_1"
+    assert fb.loss == 1.5
+    assert step.step == 1
+    assert sample.generated_logprobs == [-0.1]
+    assert calls[0][2]["tenant_id"] == "tenant-a"
+    assert calls[1][2]["data"][0]["loss_fn_inputs"]["target_tokens"] == {"tokens": [2, 3]}
+
+
+def test_sdk_train_steps_returns_async_job():
+    sdk = NemotronTinkerClient(base_url="http://unused")
+    sdk._request = lambda method, path, payload=None: {
+        "job": {
+            "job_id": "job_1",
+            "kind": "train_steps",
+            "status": "queued",
+            "created_at": "now",
+            "updated_at": "now",
+        }
+    }
+
+    result = sdk.train_steps(
+        {"run_1": [Datum(model_input=ModelInput.from_ints([1]), loss_fn_inputs={})]},
+        steps=1,
+        learning_rate=0.001,
+        run_async=True,
+    ).result()
+
+    assert result.job_id == "job_1"
+    assert result.status == "queued"
+
+
+def test_recipe_runner_builds_expected_command():
+    command = build_command(
+        {
+            "kind": "nemotron_rl",
+            "args": {
+                "base_url": "http://127.0.0.1:18082",
+                "steps": 12,
+                "cache_dir": None,
+            },
+        },
+        {"steps": 2, "tenant_id": "tenant-b"},
+    )
+
+    assert command[1].endswith("rl_lora_workload_client.py")
+    assert "--steps" in command
+    assert command[command.index("--steps") + 1] == "2"
+    assert "--tenant-id" in command
 
 
 def test_build_batch_pads_and_masks_weights():

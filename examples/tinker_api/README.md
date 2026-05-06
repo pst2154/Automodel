@@ -92,6 +92,8 @@ Ignore for tomorrow:
   model worker.
 - `nemo_automodel/services/tinker_api/server.py`: FastAPI service and metadata
   orchestration.
+- `nemo_automodel/services/tinker_api/sdk.py`: small Python SDK for creating
+  runs, sampling, training, saving, job polling, and OpenAI/Gym policy calls.
 - `nemo_automodel/services/tinker_api/grouped_lora_kernel.py`: experimental
   grouped Triton LoRA kernels.
 - `nemo_automodel/services/tinker_api/worker_manager.py`: local worker-process
@@ -99,6 +101,9 @@ Ignore for tomorrow:
 - `nemo_automodel/services/tinker_api/operator_ui.html`: NVIDIA Tinker operator
   UI with LoRA task controls and a NeMo-RL bridge panel.
 - `examples/tinker_api/run_mixed_lora_server.py`: HTTP server entry point.
+- `examples/tinker_api/run_recipe.py`: named workload recipe dispatcher.
+- `examples/tinker_api/recipes/`: checked-in workload configs for quick SFT,
+  large Nemotron SFT, and Nemotron RL LoRA.
 - `examples/tinker_api/api_smoke_client.py`: Qwen-oriented HTTP API client
   with multiple masked next-token SFT examples per adapter.
 - `examples/tinker_api/nemotron_nano_api_smoke_client.py`: deployed HTTP
@@ -133,6 +138,73 @@ Container used for validation:
 ```bash
 nvcr.io/nvidia/nemo-automodel:26.04
 ```
+
+## Python SDK
+
+Use the local SDK when writing experiments instead of hand-building HTTP JSON:
+
+```python
+from nemo_automodel.services.tinker_api.sdk import NemotronTinkerClient
+from nemo_automodel.services.tinker_api.types import Datum, ModelInput
+
+client = NemotronTinkerClient("http://127.0.0.1:18080", tenant_id="tenant-a")
+atlas = client.create_lora_training_client(name="atlas")
+
+datum = Datum(
+    model_input=ModelInput.from_ints([1, 2, 3]),
+    loss_fn_inputs={
+        "target_tokens": ModelInput.from_ints([2, 3, 4]),
+        "weights": [1.0, 1.0, 1.0],
+    },
+)
+
+atlas.forward_backward([datum]).result()
+atlas.optim_step(1e-4).result()
+print(atlas.sample("Tenant Atlas route alpha.\nAnswer:", do_sample=False).result().text)
+atlas.save_state("atlas-sdk-checkpoint").result()
+```
+
+For server-owned mixed training:
+
+```python
+result = client.train_steps(
+    {atlas.run_id: [datum]},
+    steps=10,
+    learning_rate=1e-4,
+    microbatch_size=4,
+    save_names={atlas.run_id: "atlas-train-steps"},
+).result()
+print(result.job.status, result.runs[atlas.run_id].last_loss)
+```
+
+For RL/Gym-style rollout collection:
+
+```python
+response = client.sample_openai_response(
+    atlas.run_id,
+    "Answer in one short sentence: what is adapter routing?",
+    max_output_tokens=16,
+    return_logprobs=True,
+)
+print(response["tinker_rl"]["tokens"])
+```
+
+This SDK intentionally wraps the current Nemotron-Tinker API. It is Tinker-like
+at the Python object level, but it is not yet a drop-in replacement for the
+public Tinker SDK package.
+
+## Workload Recipes
+
+Named recipes live under `examples/tinker_api/recipes/` and are run with:
+
+```bash
+python examples/tinker_api/run_recipe.py qwen_sft_quick --base-url http://127.0.0.1:18080
+python examples/tinker_api/run_recipe.py nemotron_sft_large --base-url http://127.0.0.1:18081
+python examples/tinker_api/run_recipe.py nemotron_rl_lora --base-url http://127.0.0.1:18082
+```
+
+Use `--dry-run` to print the underlying command, and `--steps` or
+`--tenant-id` to override the recipe for a one-off run.
 
 ## Nemotron Nano Result
 
@@ -723,7 +795,7 @@ tile.
 - Local `ruff` and `py_compile`: passed.
 - Focused SFT tokenization regressions: `2 passed`.
 - Broader local Tinker service suite after explicit CUDA skips:
-  `61 passed, 3 skipped`.
+  `64 passed, 3 skipped`.
 
 Local laptop pytest is not reliable because the local environment has a
 `tokenizers`/`transformers` version mismatch. Use the container for meaningful
