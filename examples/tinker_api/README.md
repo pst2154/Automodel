@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# NVIDIA Tinker
+# Nemotron Tinker
 
-NVIDIA Tinker is an experimental Tinker-style API service for training and
+Nemotron Tinker is an experimental Tinker-style API service for training and
 serving multiple LoRA adapters over one resident base model with NeMo
 AutoModel. It includes:
 
@@ -22,7 +22,7 @@ AutoModel. It includes:
   checkpointing, async jobs, tenant scoping, and worker metadata.
 - A small Python SDK for experiment code.
 - Named workload recipes for repeatable SFT and RL tests.
-- A standalone NVIDIA-themed async demo.
+- A standalone Nemotron-themed async demo.
 - An operator UI at `/ui` when the service is running.
 
 The branch focus is single-node V1 readiness. The service has been validated on
@@ -59,8 +59,8 @@ Start the service with a small model:
 ```bash
 python examples/tinker_api/run_mixed_lora_server.py \
   --base-model Qwen/Qwen3-0.6B \
-  --scratch-dir /tmp/nvidia_tinker \
-  --cache-dir /tmp/nvidia_tinker_hf \
+  --scratch-dir /tmp/nemotron_tinker \
+  --cache-dir /tmp/nemotron_tinker_hf \
   --host 127.0.0.1 \
   --port 18080
 ```

@@ -1,12 +1,12 @@
 ---
 name: nemotron-tinker
-description: Use for work on the NVIDIA Tinker / Nemotron-Tinker prototype, including the Tinker-like FastAPI service, mixed-LoRA adapters, SFT recipes, RL LoRA, NeMo Gym bridge, NeMo-RL bridge, SDK usage, operator UI, standalone demo, and CompLab validation workflows.
+description: Use for work on the Nemotron Tinker / Nemotron-Tinker prototype, including the Tinker-like FastAPI service, mixed-LoRA adapters, SFT recipes, RL LoRA, NeMo Gym bridge, NeMo-RL bridge, SDK usage, operator UI, standalone demo, and CompLab validation workflows.
 ---
 
 # Nemotron-Tinker
 
 Use this skill when changing, testing, documenting, or operating the
-NVIDIA Tinker prototype under `examples/tinker_api/` and
+Nemotron Tinker prototype under `examples/tinker_api/` and
 `nemo_automodel/services/tinker_api/`.
 
 ## First Moves
@@ -38,7 +38,7 @@ NVIDIA Tinker prototype under `examples/tinker_api/` and
 - `examples/tinker_api/run_mixed_lora_server.py`: service entry point.
 - `examples/tinker_api/run_recipe.py`: named workload dispatcher.
 - `examples/tinker_api/recipes/`: repeatable SFT and RL recipe configs.
-- `examples/tinker_api/async_lora_demo.html`: standalone NVIDIA Tinker demo.
+- `examples/tinker_api/async_lora_demo.html`: standalone Nemotron Tinker demo.
 
 ## Implementation Rules
 

@@ -18,7 +18,7 @@ Nemotron-Tinker is an experimental Tinker-style service for training and serving
 many LoRA adapters over one resident base model. The current implementation is
 single-node first: keep the base model hot on one GPU host, create separate
 resident LoRA runs, route each request row to the right adapter, and expose the
-workflow through HTTP, a small Python SDK, and the NVIDIA Tinker operator UI.
+workflow through HTTP, a small Python SDK, and the Nemotron Tinker operator UI.
 
 ## Control Plane
 
@@ -48,7 +48,7 @@ Important files:
   LoRA routing, losses, sampling, and save/restore.
 - `nemo_automodel/services/tinker_api/worker_manager.py`: local process
   supervision and management RPC.
-- `nemo_automodel/services/tinker_api/operator_ui.html`: NVIDIA Tinker UI.
+- `nemo_automodel/services/tinker_api/operator_ui.html`: Nemotron Tinker UI.
 - `nemo_automodel/services/tinker_api/sdk.py`: Python client wrapper.
 - `nemo_automodel/services/tinker_api/grouped_lora_kernel.py`: experimental
   grouped Triton LoRA kernels.

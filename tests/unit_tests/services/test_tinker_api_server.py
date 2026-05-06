@@ -187,7 +187,7 @@ def test_mixed_lora_server_serves_operator_ui(monkeypatch, tmp_path):
     response = client.get("/ui")
 
     assert response.status_code == 200
-    assert "NVIDIA Tinker" in response.text
+    assert "Nemotron Tinker" in response.text
     assert 'id="create-run"' in response.text
     assert 'id="rl-launch"' in response.text
 

@@ -86,7 +86,7 @@ Local browser tunnel:
 ssh -f -N -L 18080:127.0.0.1:18080 -o ExitOnForwardFailure=yes 4u8g-gen-0277
 ```
 
-NVIDIA Tinker to NeMo-RL bridge smoke:
+Nemotron Tinker to NeMo-RL bridge smoke:
 
 ```bash
 ssh alon-ts1-iec-03 docker run --rm --gpus all --ipc=host --network host \
@@ -97,7 +97,7 @@ ssh alon-ts1-iec-03 docker run --rm --gpus all --ipc=host --network host \
   nvcr.io/nvidia/nemo-automodel:26.04 \
   python examples/tinker_api/run_mixed_lora_server.py \
     --base-model Qwen/Qwen3-0.6B \
-    --scratch-dir /home/scratch.asteiner/nvidia_tinker_rl \
+    --scratch-dir /home/scratch.asteiner/nemotron_tinker_rl \
     --cache-dir /home/scratch.asteiner/hf \
     --rl-repo-dir /workspace/RL \
     --host 127.0.0.1 --port 18080

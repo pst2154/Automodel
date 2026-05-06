@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NVIDIA Tinker</title>
+    <title>Nemotron Tinker</title>
     <style>
       :root {
         --bg: #050607;
@@ -167,6 +167,36 @@
         grid-template-columns: minmax(180px, 1fr) auto;
         gap: 10px;
         min-width: min(520px, 100%);
+      }
+
+      .modebar {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .mode {
+        min-height: 82px;
+        text-align: left;
+        color: var(--ink);
+        background: #0c0f12;
+      }
+
+      .mode.active {
+        border-color: var(--green);
+        background: var(--green-soft);
+        box-shadow: 0 0 0 1px rgba(118, 185, 0, 0.2), var(--shadow);
+      }
+
+      .mode b {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--green);
+      }
+
+      .mode span {
+        color: var(--muted);
+        font-size: 12px;
       }
 
       main {
@@ -398,6 +428,7 @@
         }
 
         .top,
+        .modebar,
         .three,
         .four {
           grid-template-columns: 1fr;
@@ -408,9 +439,10 @@
   <body>
     <header>
       <div>
-        <h1>NVIDIA Tinker</h1>
+        <h1>Nemotron Tinker</h1>
         <div class="subline">
-          <span class="pill brand">NVIDIA</span>
+          <span class="pill brand">Nemotron</span>
+          <span class="pill">SDK-driven UI</span>
           <span id="health" class="pill">Service: checking</span>
           <span id="model" class="pill">Model: -</span>
           <span id="workspace-pill" class="pill">Workspace: -</span>
@@ -425,19 +457,34 @@
     <main>
       <section>
         <div class="section-head">
-          <h2>Do This In Order</h2>
+          <h2>Choose A Workflow</h2>
+          <span id="mode-note" class="tiny">SFT uses the SDK-style create, train_steps, sample loop.</span>
+        </div>
+        <div class="body">
+          <div class="modebar">
+            <button class="mode active" data-mode="sft"><b>SFT</b><span>Train two LoRAs on different text tasks.</span></button>
+            <button class="mode" data-mode="rl"><b>RL LoRA</b><span>Sample rollouts, reward them, then train adapters.</span></button>
+            <button class="mode" data-mode="gym"><b>Gym</b><span>Use OpenAI-compatible policy calls with logprobs.</span></button>
+            <button class="mode" data-mode="nemo"><b>NeMo-RL</b><span>Launch or dry-run separate GRPO jobs.</span></button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>SDK Training Loop</h2>
           <button id="new-workspace">New Clean Workspace</button>
         </div>
         <div class="body">
           <div class="steps">
             <div id="step-1" class="step active"><b>1</b>Pick a workspace.</div>
-            <div id="step-2" class="step"><b>2</b>Create two LoRAs.</div>
-            <div id="step-3" class="step"><b>3</b>Train both on different tasks.</div>
-            <div id="step-4" class="step"><b>4</b>Sample each LoRA.</div>
+            <div id="step-2" class="step"><b>2</b>Create SDK training clients.</div>
+            <div id="step-3" class="step"><b>3</b>Run train_steps.</div>
+            <div id="step-4" class="step"><b>4</b>Sample each adapter.</div>
           </div>
           <div class="big-actions">
-            <button id="create-run" class="primary">Create 2 LoRAs</button>
-            <button id="train-both" class="primary">Train 2 LoRAs</button>
+            <button id="create-run" class="primary">Create 2 Training Clients</button>
+            <button id="train-both" class="primary">Run SDK train_steps</button>
             <button id="sample-atlas" class="blue">Sample Atlas</button>
             <button id="sample-borealis" class="blue">Sample Borealis</button>
           </div>
@@ -503,7 +550,7 @@ Answer:</textarea></label>
       <section>
         <div class="section-head">
           <h2>NeMo-RL Bridge</h2>
-          <span class="tiny">Launch or dry-run GRPO from the NVIDIA Tinker UI.</span>
+          <span class="tiny">Launch or dry-run GRPO from Nemotron Tinker.</span>
         </div>
         <div class="body">
           <div class="two">
@@ -578,8 +625,112 @@ logger.wandb_enabled=false</textarea></label>
         toastTimer: null,
         busy: null,
         buttonLabels: {},
+        mode: "sft",
       };
       const $ = (id) => document.getElementById(id);
+
+      class NemotronTinkerSdk {
+        constructor(root, workspaceProvider) {
+          this.root = root;
+          this.workspaceProvider = workspaceProvider;
+        }
+
+        headers(scoped = true) {
+          const headers = { "Content-Type": "application/json" };
+          const tenant = this.workspaceProvider();
+          if (scoped && tenant) headers["X-Tinker-Tenant-Id"] = tenant;
+          return headers;
+        }
+
+        async call(path, options = {}, scoped = true) {
+          const response = await fetch(`${this.root()}${path}`, {
+            ...options,
+            headers: { ...this.headers(scoped), ...(options.headers || {}) },
+          });
+          const text = await response.text();
+          const payload = text ? JSON.parse(text) : {};
+          if (!response.ok) throw new Error(`${response.status} ${payload.detail || text}`);
+          return payload;
+        }
+
+        health() {
+          return this.call("/health", {}, false);
+        }
+
+        runs() {
+          return this.call("/runs");
+        }
+
+        jobs() {
+          return this.call("/jobs");
+        }
+
+        metrics() {
+          return this.call("/metrics", {}, false);
+        }
+
+        rlJobs() {
+          return this.call("/rl/jobs");
+        }
+
+        createTrainingClient(name) {
+          return this.call("/runs", { method: "POST", body: JSON.stringify({ name }) });
+        }
+
+        sftDatum(prompt, completion, maxTokens) {
+          return this.call(
+            "/datasets/sft_datum",
+            {
+              method: "POST",
+              body: JSON.stringify({ prompt, completion, max_tokens: maxTokens }),
+            },
+            false,
+          );
+        }
+
+        trainSteps(batches, steps, learningRate) {
+          return this.call("/train_steps", {
+            method: "POST",
+            body: JSON.stringify({
+              batches,
+              steps,
+              learning_rate: learningRate,
+              run_async: true,
+            }),
+          });
+        }
+
+        job(jobId) {
+          return this.call(`/jobs/${jobId}`);
+        }
+
+        sample(runId, prompt) {
+          return this.call(`/runs/${runId}/sample`, {
+            method: "POST",
+            body: JSON.stringify({ prompt, max_new_tokens: 12, do_sample: false, temperature: 0.0 }),
+          });
+        }
+
+        save(runId, name) {
+          return this.call(`/runs/${runId}/save`, { method: "POST", body: JSON.stringify({ name }) });
+        }
+
+        detach(runId) {
+          return this.call(`/runs/${runId}/detach`, { method: "POST", body: "{}" });
+        }
+
+        submitRlJob(payload) {
+          return this.call("/rl/jobs", { method: "POST", body: JSON.stringify(payload) });
+        }
+
+        rlLogs(jobId) {
+          return this.call(`/rl/jobs/${jobId}/logs?tail_bytes=50000`);
+        }
+
+        cancelRlJob(jobId) {
+          return this.call(`/rl/jobs/${jobId}/cancel`, { method: "POST" });
+        }
+      }
 
       function apiRoot() {
         return window.location.origin;
@@ -589,22 +740,7 @@ logger.wandb_enabled=false</textarea></label>
         return $("workspace").value.trim();
       }
 
-      function scopedHeaders() {
-        const headers = { "Content-Type": "application/json" };
-        if (workspace()) headers["X-Tinker-Tenant-Id"] = workspace();
-        return headers;
-      }
-
-      async function call(path, options = {}, scoped = true) {
-        const response = await fetch(`${apiRoot()}${path}`, {
-          ...options,
-          headers: { ...(scoped ? scopedHeaders() : { "Content-Type": "application/json" }), ...(options.headers || {}) },
-        });
-        const text = await response.text();
-        const payload = text ? JSON.parse(text) : {};
-        if (!response.ok) throw new Error(`${response.status} ${payload.detail || text}`);
-        return payload;
-      }
+      const sdk = new NemotronTinkerSdk(apiRoot, workspace);
 
       function toast(message, error = false) {
         const node = $("toast");
@@ -616,6 +752,29 @@ logger.wandb_enabled=false</textarea></label>
 
       function raw(payload) {
         $("raw").textContent = JSON.stringify(payload, null, 2);
+      }
+
+      function setMode(mode) {
+        state.mode = mode;
+        document.querySelectorAll("[data-mode]").forEach((button) => {
+          button.classList.toggle("active", button.dataset.mode === mode);
+        });
+        const notes = {
+          sft: "SFT uses the SDK-style createTrainingClient, sftDatum, trainSteps, and sample loop.",
+          rl: "RL LoRA uses policy rollouts with logprobs, reward/advantage data, then trainSteps with an RL loss.",
+          gym: "Gym mode uses the OpenAI-compatible /v1 policy endpoints for rollout collection before RL training.",
+          nemo: "NeMo-RL mode uses the bridge below to dry-run or launch a separate GRPO job.",
+        };
+        $("mode-note").textContent = notes[mode];
+        $("train-both").textContent = mode === "sft" ? "Run SDK train_steps" : "Run SFT train_steps";
+        $("rl-output").textContent =
+          mode === "nemo"
+            ? "Use the NeMo-RL Bridge controls below to prepare or launch a job."
+            : mode === "gym"
+              ? "Use SDK sample_openai_response(...) or /v1/responses with tinker_return_logprobs=true for Gym rollouts."
+              : mode === "rl"
+                ? "Resident RL LoRA uses rollout JSON with tokens, old logprobs, weights, and advantages."
+                : "RL job status appears here.";
       }
 
       function setTrainProgress(step, total, status = "running") {
@@ -724,14 +883,14 @@ logger.wandb_enabled=false</textarea></label>
 
       async function refresh() {
         if (state.busy) return;
-        state.health = await call("/health", {}, false);
+        state.health = await sdk.health();
         if (state.health.rl_repo_dir && $("rl-repo").value === "/Users/asteiner/Documents/Git_Repos/RL") {
           $("rl-repo").value = state.health.rl_repo_dir;
         }
-        state.runs = await call("/runs");
-        state.jobs = await call("/jobs");
-        state.rlJobs = await call("/rl/jobs");
-        state.metrics = await call("/metrics", {}, false);
+        state.runs = await sdk.runs();
+        state.jobs = await sdk.jobs();
+        state.rlJobs = await sdk.rlJobs();
+        state.metrics = await sdk.metrics();
         render();
       }
 
@@ -774,7 +933,7 @@ logger.wandb_enabled=false</textarea></label>
       }
 
       async function refreshRlOutput(jobId = null) {
-        state.rlJobs = await call("/rl/jobs");
+        state.rlJobs = await sdk.rlJobs();
         const job = jobId ? state.rlJobs.find((item) => item.job_id === jobId) : latestRlJob();
         if (!job) {
           $("rl-output").textContent = "No RL jobs yet.";
@@ -789,7 +948,7 @@ logger.wandb_enabled=false</textarea></label>
       async function submitRlJob(dryRun) {
         setBusy("rl", dryRun ? "Preparing..." : "Launching...", dryRun ? "rl-dry-run" : "rl-launch");
         try {
-          const response = await call("/rl/jobs", { method: "POST", body: JSON.stringify(rlPayload(dryRun)) });
+          const response = await sdk.submitRlJob(rlPayload(dryRun));
           raw(response);
           $("rl-output").textContent = `${response.job.command.join(" ")}\n\n${JSON.stringify(response.job, null, 2)}`;
           toast(dryRun ? "RL command prepared." : "RL job launched.");
@@ -802,14 +961,14 @@ logger.wandb_enabled=false</textarea></label>
       async function showRlLogs() {
         const job = latestRlJob();
         if (!job) throw new Error("No RL job selected.");
-        const logs = await call(`/rl/jobs/${job.job_id}/logs?tail_bytes=50000`);
+        const logs = await sdk.rlLogs(job.job_id);
         $("rl-output").textContent = logs.text || "No logs yet.";
       }
 
       async function cancelRlJob() {
         const job = latestRlJob();
         if (!job) throw new Error("No RL job selected.");
-        const canceled = await call(`/rl/jobs/${job.job_id}/cancel`, { method: "POST" });
+        const canceled = await sdk.cancelRlJob(job.job_id);
         $("rl-output").textContent = JSON.stringify(canceled, null, 2);
         toast(`RL job ${canceled.status}.`);
         await refreshRlOutput(job.job_id);
@@ -824,8 +983,8 @@ logger.wandb_enabled=false</textarea></label>
         setBusy("create", "Creating...", "create-run", "step-2");
         const created = [];
         try {
-          if (!atlas()) created.push(await call("/runs", { method: "POST", body: JSON.stringify({ name: "atlas" }) }));
-          if (!borealis()) created.push(await call("/runs", { method: "POST", body: JSON.stringify({ name: "borealis" }) }));
+          if (!atlas()) created.push(await sdk.createTrainingClient("atlas"));
+          if (!borealis()) created.push(await sdk.createTrainingClient("borealis"));
           raw({ created });
           toast(created.length ? "Created Atlas and/or Borealis." : "Both LoRAs already exist.");
           await refresh();
@@ -835,18 +994,7 @@ logger.wandb_enabled=false</textarea></label>
       }
 
       async function sftDatum(prompt, completion) {
-        return call(
-          "/datasets/sft_datum",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              prompt,
-              completion,
-              max_tokens: Number($("max-tokens").value),
-            }),
-          },
-          false,
-        );
+        return sdk.sftDatum(prompt, completion, Number($("max-tokens").value));
       }
 
       async function batches() {
@@ -864,22 +1012,14 @@ logger.wandb_enabled=false</textarea></label>
         setBusy("train", "Training...", "train-both", "step-3");
         try {
           setTrainProgress(0, Number($("steps").value), "queued");
-          const submitted = await call("/train_steps", {
-            method: "POST",
-            body: JSON.stringify({
-              batches: await batches(),
-              steps: Number($("steps").value),
-              learning_rate: Number($("lr").value),
-              run_async: true,
-            }),
-          });
+          const submitted = await sdk.trainSteps(await batches(), Number($("steps").value), Number($("lr").value));
           let job = submitted.job;
           raw(submitted);
           while (!["succeeded", "failed", "canceled"].includes(job.status)) {
             const progress = job.progress || {};
             setTrainProgress(progress.step || 0, progress.total_steps || $("steps").value, job.status);
             await new Promise((resolve) => setTimeout(resolve, 1000));
-            job = await call(`/jobs/${job.job_id}`);
+            job = await sdk.job(job.job_id);
           }
           const progress = job.progress || {};
           setTrainProgress(progress.step || 0, progress.total_steps || $("steps").value, job.status);
@@ -913,10 +1053,7 @@ logger.wandb_enabled=false</textarea></label>
         setBusy(`sample-${which}`, "Sampling...", buttonId, "step-4", outputId);
         const prompt = which === "atlas" ? $("atlas-prompt").value : $("borealis-prompt").value;
         try {
-          const result = await call(`/runs/${run.run_id}/sample`, {
-            method: "POST",
-            body: JSON.stringify({ prompt, max_new_tokens: 12, do_sample: false, temperature: 0.0 }),
-          });
+          const result = await sdk.sample(run.run_id, prompt);
           $(outputId).innerHTML =
             `<h3>${which[0].toUpperCase() + which.slice(1)} output</h3>${visibleText(result, prompt)}`;
           raw(result);
@@ -931,8 +1068,8 @@ logger.wandb_enabled=false</textarea></label>
         setBusy("save", "Saving...", "save-both");
         const results = [];
         try {
-          if (atlas()) results.push(await call(`/runs/${atlas().run_id}/save`, { method: "POST", body: JSON.stringify({ name: "atlas-ui" }) }));
-          if (borealis()) results.push(await call(`/runs/${borealis().run_id}/save`, { method: "POST", body: JSON.stringify({ name: "borealis-ui" }) }));
+          if (atlas()) results.push(await sdk.save(atlas().run_id, "atlas-ui"));
+          if (borealis()) results.push(await sdk.save(borealis().run_id, "borealis-ui"));
           raw({ saved: results });
           toast("Saved both LoRAs.");
           await refresh();
@@ -945,8 +1082,8 @@ logger.wandb_enabled=false</textarea></label>
         setBusy("detach", "Detaching...", "detach-both");
         const results = [];
         try {
-          if (atlas()) results.push(await call(`/runs/${atlas().run_id}/detach`, { method: "POST", body: "{}" }));
-          if (borealis()) results.push(await call(`/runs/${borealis().run_id}/detach`, { method: "POST", body: "{}" }));
+          if (atlas()) results.push(await sdk.detach(atlas().run_id));
+          if (borealis()) results.push(await sdk.detach(borealis().run_id));
           raw({ detached: results });
           toast("Detached both LoRAs.");
           await refresh();
@@ -982,12 +1119,16 @@ logger.wandb_enabled=false</textarea></label>
       });
       $("save-both").onclick = () => handle(saveBoth);
       $("detach-both").onclick = () => handle(detachBoth);
+      document.querySelectorAll("[data-mode]").forEach((button) => {
+        button.onclick = () => setMode(button.dataset.mode);
+      });
       $("rl-dry-run").onclick = () => handle(() => submitRlJob(true));
       $("rl-launch").onclick = () => handle(() => submitRlJob(false));
       $("rl-refresh").onclick = () => handle(() => refreshRlOutput());
       $("rl-logs").onclick = () => handle(showRlLogs);
       $("rl-cancel").onclick = () => handle(cancelRlJob);
 
+      setMode("sft");
       refresh().catch((error) => toast(error.message, true));
       setInterval(() => refresh().catch(() => {}), 5000);
     </script>

@@ -78,7 +78,7 @@ def main() -> None:
     parser.add_argument(
         "--rl-repo-dir",
         default=os.environ.get("NEMO_RL_REPO_DIR"),
-        help="Optional NeMo-RL checkout used by the NVIDIA Tinker RL job bridge.",
+        help="Optional NeMo-RL checkout used by the Nemotron Tinker RL job bridge.",
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18080)
